@@ -1,0 +1,21 @@
+{
+  "name": "sprite-gen-mcp",
+  "version": "1.0.0",
+  "description": "Sprite Sheet Generator MCP Server — runs standalone, no DSH required",
+  "type": "module",
+  "main": "server.js",
+  "bin": {
+    "sprite-gen-mcp": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "sharp": "^0.35.4"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

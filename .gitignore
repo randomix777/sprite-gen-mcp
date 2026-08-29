@@ -1,0 +1,7 @@
+node_modules/
+config/
+output/
+tmp/
+*.pyc
+__pycache__/
+package-lock.json
