@@ -1,6 +1,8 @@
 /**
- * sprite-gen MCP Server
- * Standalone MCP server — no DeepSeek Harness required.
+ * sprite-gen MCP Server — Protocol adapter layer.
+ *
+ * This file is the ONLY place that imports MCP SDK.
+ * All business logic lives in lib/services.js.
  *
  * Usage:
  *   node server.js
@@ -17,35 +19,143 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import {
-  loadConfig, saveConfig, getProviderConfig, listProviders, getConfigSummary, IMAGE_PROVIDERS
-} from "./lib/config.js";
-import { generateImage } from "./lib/image_gen.js";
-import { saveGeneratedImage, runPythonScript } from "./lib/utils.js";
-import { generateAnimationSequence, listAnimationSequences } from "./lib/animation_gen.js";
-import { generateEffect, listEffects } from "./lib/effects_gen.js";
-import { generateWeapon, listWeapons } from "./lib/weapon_gen.js";
-import { batchGenerate, batchProcess } from "./lib/batch_gen.js";
-import {
-  generateParallaxBackground,
-  regenerateParallaxLayer,
-} from "./lib/background_gen.js";
-import { createSession, appendEdit, getSession, listSessions } from "./lib/sessions.js";
-import { exportGodotSpriteFrames, autoDetectAnimations } from "./lib/godot_export.js";
-import { generateGifPreview, generateDirectionalGifs } from "./lib/gif_preview.js";
-import { videoToSpriteSheet, extractVideoFrames } from "./lib/video_gen.js";
+  configService, sheetService, generateImageService, infoService,
+  cutoutService, gifPreviewService, godotExportService,
+  detectAnimationsService, sessionListService, editService,
+  autotileService, videoToSheetService, extractVideoFramesService,
+  engineExportService, paletteExtractService, qcReportService,
+  godotImportService, godotAddAnimationService, godotWireAnimationsService,
+  godotScanService, styleListService, animationSequenceService,
+  animationListService, effectGenerateService, effectListService,
+  weaponGenerateService, weaponListService, batchGenerateService,
+  batchProcessService, backgroundService,
+} from "./lib/services.js";
+
+import { ok, err, ErrorCode, sanitizeMessage } from "./lib/result.js";
+import { validate } from "./lib/validate.js";
 import { STYLE_PRESETS } from "./lib/prompts.js";
-import { exportTexturePacker, exportAseprite, exportGodotScene } from "./lib/engine_export.js";
-import { extractPalette, qcReport } from "./lib/analysis.js";
-import { godotImportSheet, godotAddAnimation, godotWireAnimations, godotScanProject } from "./lib/godot_integration.js";
 
 import path from "path";
 import { fileURLToPath } from "url";
-import fs from "fs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PYTHON_SCRIPT = path.join(__dirname, "lib", "process_sprites.py");
+// ─── Runtime validation schemas ─────────────────────────────────────────────
 
-// ─── Tool definitions ────────────────────────────────────────────────────────
+const TOOL_SCHEMAS = {
+  "sprite__config": {
+    action: { type: 'string', required: true, enum: ['list', 'get', 'set', 'set_key', 'set_provider', 'get_default'] },
+  },
+  "sprite__sheet": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    grid_cols: { type: 'number', min: 1, max: 64 },
+    grid_rows: { type: 'number', min: 1, max: 64 },
+  },
+  "sprite_generate_image": {
+    prompt: { type: 'string', required: true, minLength: 1, maxLength: 10000 },
+    provider: { type: 'string', enum: ['gemini_flash', 'stable_diffusion', 'agnes', 'comfy'] },
+    width: { type: 'number', min: 16, max: 4096 },
+    height: { type: 'number', min: 16, max: 4096 },
+  },
+  "sprite_cutout": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_animation_sequence": {
+    sequence: { type: 'string', required: true, minLength: 1 },
+    reference_image_path: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_generate_effect": {
+    effect: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_generate_weapon": {
+    weapon: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_batch_generate": {
+    items: { type: 'array', required: true, minItems: 1, maxItems: 50 },
+  },
+  "sprite_batch_process": {
+    items: { type: 'array', required: true, minItems: 1, maxItems: 100 },
+  },
+  "sprite_generate_background": {
+    character_prompt: { type: 'string', required: true, minLength: 1 },
+    character_image_url: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_preview_gif": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+    cell_height: { type: 'number', min: 1, max: 4096 },
+    fps: { type: 'number', min: 1, max: 60 },
+  },
+  "sprite_export_godot": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+    output_path: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_detect_animations": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+  },
+  "sprite_edit": {
+    session_id: { type: 'string', required: true, minLength: 1 },
+    instruction: { type: 'string', required: true, minLength: 1, maxLength: 5000 },
+  },
+  "sprite_autotile": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    tile_size: { type: 'array', minItems: 2, maxItems: 2 },
+  },
+  "sprite_video_to_sheet": {
+    video_path: { type: 'string', required: true, minLength: 1 },
+    fps: { type: 'number', min: 1, max: 60 },
+    pixel_scale: { type: 'number', min: 1, max: 32 },
+    colors: { type: 'number', min: 2, max: 256 },
+  },
+  "sprite_extract_video_frames": {
+    video_path: { type: 'string', required: true, minLength: 1 },
+    fps: { type: 'number', min: 1, max: 60 },
+  },
+  "sprite_export_tpacker": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+    cell_height: { type: 'number', required: true, min: 1, max: 4096 },
+  },
+  "sprite_export_aseprite": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+    cell_height: { type: 'number', required: true, min: 1, max: 4096 },
+  },
+  "sprite_export_godot_scene": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+    output_path: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_palette_extract": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    colors: { type: 'number', min: 1, max: 256 },
+  },
+  "sprite_qc_report": {
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+    cell_height: { type: 'number', required: true, min: 1, max: 4096 },
+  },
+  "sprite_godot_import": {
+    project_path: { type: 'string', required: true, minLength: 1 },
+    image_path: { type: 'string', required: true, minLength: 1 },
+    cell_width: { type: 'number', required: true, min: 1, max: 4096 },
+  },
+  "sprite_godot_add_animation": {
+    tre_path: { type: 'string', required: true, minLength: 1 },
+    animation_name: { type: 'string', required: true, minLength: 1, maxLength: 100 },
+  },
+  "sprite_godot_wire_animations": {
+    project_path: { type: 'string', required: true, minLength: 1 },
+    scene_path: { type: 'string', required: true, minLength: 1 },
+    node_path: { type: 'string', required: true, minLength: 1 },
+    animations: { type: 'object', required: true },
+  },
+  "sprite_godot_scan": {
+    project_path: { type: 'string', required: true, minLength: 1 },
+  },
+};
+
+// ─── Tool definitions (MCP schema only) ────────────────────────────────────
 
 const TOOLS = [
   // ── Config ───────────────────────────────────────────────────────────────
@@ -508,415 +618,52 @@ const TOOLS = [
   },
 ];
 
-// ─── Tool handlers ───────────────────────────────────────────────────────────
-
-async function handleConfig(args) {
-  const config = loadConfig();
-  switch (args.action) {
-    case "list":
-      return {
-        success: true,
-        data: {
-          defaultProvider: config.defaultProvider,
-          providers: listProviders().map((p) => ({
-            ...p,
-            hasKey: !!config.credentials?.[p.id]?.apiKey,
-          })),
-          spriteSheet: config.spriteSheet || {},
-        },
-      };
-    case "get":
-      return { success: true, data: config };
-    case "get_default":
-      return {
-        success: true,
-        data: {
-          defaultProvider: config.defaultProvider,
-          ...(config.spriteSheet || {}),
-        },
-      };
-    case "set":
-      if (args.config) {
-        saveConfig({ ...config, ...args.config });
-        return { success: true, data: getConfigSummary() };
-      }
-      if (args.sprite_sheet) {
-        saveConfig({ ...config, spriteSheet: { ...config.spriteSheet, ...args.sprite_sheet } });
-        return { success: true, data: getConfigSummary() };
-      }
-      if (args.default_provider) {
-        if (!IMAGE_PROVIDERS[args.default_provider])
-          return { error: `Unknown provider: ${args.default_provider}` };
-        saveConfig({ ...config, defaultProvider: args.default_provider });
-        return { success: true, data: getConfigSummary() };
-      }
-      return { error: "Missing provider or config" };
-    case "set_key": {
-      if (!args.provider || !args.api_key)
-        return { error: "Missing provider or api_key" };
-      if (!IMAGE_PROVIDERS[args.provider])
-        return { error: `Unknown provider: ${args.provider}` };
-      const credentials = {
-        ...(config.credentials || {}),
-        [args.provider]: {
-          apiKey: args.api_key,
-          ...(args.base_url ? { baseUrl: args.base_url } : {}),
-          ...(args.model ? { model: args.model } : {}),
-        },
-      };
-      saveConfig({ ...config, credentials });
-      return { success: true, data: getConfigSummary() };
-    }
-    case "set_provider": {
-      if (!args.provider || !IMAGE_PROVIDERS[args.provider])
-        return { error: `Invalid or unknown provider: ${args.provider}` };
-      saveConfig({ ...config, defaultProvider: args.provider });
-      return { success: true, data: getConfigSummary() };
-    }
-    default:
-      return { error: `Unknown action: ${args.action}` };
-  }
-}
-
-async function handleSheet(args) {
-  try {
-    const result = await runPythonScript({
-      image_path: args.image_path,
-      grid_cols: args.grid_cols ?? 4,
-      grid_rows: args.grid_rows ?? 4,
-      crop_mode: args.crop_mode ?? "auto",
-      spacing: args.spacing ?? 0,
-      cell_width: args.cell_width ?? 32,
-      cell_height: args.cell_height ?? 32,
-      output_path: args.output_path ?? "./output/sprite_sheet.png",
-      padding: args.padding ?? 0,
-    });
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleGenerateImage(args) {
-  try {
-    const gen = await generateImage(args);
-    if (!gen.success) return { success: false, ...gen };
-    if (!gen.images || gen.images.length === 0)
-      return { success: false, error: "No images generated" };
-
-    const outPath = args.output_path || "./output/generated.png";
-    const configDir = path.join(__dirname, "config");
-    fs.mkdirSync(configDir, { recursive: true });
-    const tmpImagePath = path.join(configDir, ".generated_tmp.png");
-    saveGeneratedImage(gen.images[0].data, gen.images[0].mimeType, tmpImagePath);
-
-    const sheetResult = await runPythonScript({
-      image_path: tmpImagePath,
-      grid_cols: args.grid_cols ?? 4,
-      grid_rows: args.grid_rows ?? 4,
-      crop_mode: args.crop_mode ?? "auto",
-      spacing: 0,
-      cell_width: args.width ?? 1024,
-      cell_height: args.height ?? 1024,
-      output_path: outPath,
-      padding: 0,
-    });
-
-    if (!sheetResult.success) return sheetResult;
-    return {
-      success: true,
-      output_path: outPath,
-      output_size: sheetResult.output_size,
-      grid_cols: sheetResult.grid_cols,
-      grid_rows: sheetResult.grid_rows,
-      crop_mode: sheetResult.crop_mode,
-    };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleInfo() {
-  const config = loadConfig();
-  return {
-    success: true,
-    data: {
-      name: "sprite-gen-mcp",
-      version: "1.0.0",
-      defaultProvider: config.defaultProvider,
-      providers: listProviders(),
-      configured: getConfigSummary().providers
-        .filter((p) => p.configured)
-        .map((p) => p.id),
-    },
-  };
-}
-
-async function handleCutout(args) {
-  try {
-    const result = await runPythonScript({
-      command: "cutout",
-      image_path: args.image_path,
-      output_path: args.output_path || "./output/cutout.png",
-      dist_threshold: args.dist_threshold ?? 60,
-      corner_region: args.corner_region ?? 30,
-      target_width: args.target_width ?? 512,
-      target_height: args.target_height ?? 768,
-    });
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleGifPreview(args) {
-  try {
-    const result = await generateGifPreview(args);
-    if (!result.success) return result;
-    return {
-      success: true,
-      gif_path: result.gif_path,
-      frames: result.frames,
-      fps: result.fps,
-      message: `GIF saved: ${result.gif_path}`,
-    };
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleGodotExport(args) {
-  try {
-    const result = await exportGodotSpriteFrames(args);
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleDetectAnimations(args) {
-  try {
-    const result = await autoDetectAnimations(args.image_path, args.cell_width);
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleSessionList() {
-  return { success: true, sessions: listSessions() };
-}
-
-async function handleEdit(args) {
-  const { session_id, instruction, output_path, provider } = args;
-  const session = getSession(session_id);
-  if (!session) return { success: false, error: `Session not found: ${session_id}` };
-
-  const referencePath = session.output_path || session.history?.[session.history.length - 1]?.output_path;
-  if (!referencePath) return { success: false, error: "No previous output to edit" };
-
-  // Read the reference image as base64 for the edit prompt
-  const fs = (await import('fs')).default;
-  const path = (await import('path')).default;
-  let imageData = null;
-  try {
-    imageData = fs.readFileSync(referencePath).toString('base64');
-  } catch (_) {
-    // File may not exist or be accessible; fall back to text prompt only
-  }
-
-  // Generate edited version using the image gen with image_urls reference
-  const editPrompt = `${instruction}. Use the reference image at ${referencePath} as the base. Maintain the same art style and character appearance.`;
-
-  const genArgs = {
-    provider: provider || session.provider || 'agnes',
-    prompt: editPrompt,
-    imageUrls: [referencePath],
-    width: 1024,
-    height: 1024,
-  };
-
-  const gen = await (await import('./lib/image_gen.js')).generateImage(genArgs);
-  if (!gen.success) return gen;
-  if (!gen.images || gen.images.length === 0) {
-    return { success: false, error: 'No images generated' };
-  }
-
-  const outPath = output_path || path.join(path.dirname(referencePath), `edited_${session_id}.png`);
-  const { saveGeneratedImage } = await import('./lib/utils.js');
-  const absPath = saveGeneratedImage(gen.images[0].data, gen.images[0].mimeType, outPath);
-
-  const updated = appendEdit(session_id, { instruction, output_path: absPath });
-  return {
-    success: true,
-    session_id,
-    step: updated?.history?.length ?? 1,
-    output_path: absPath,
-    instruction,
-  };
-}
+// ─── Tool dispatch (thin routing only) ──────────────────────────────────────
 
 async function handleToolCall(name, args) {
+  // Runtime parameter validation
+  const schema = TOOL_SCHEMAS[name];
+  if (schema) {
+    const validationError = validate(args, schema);
+    if (validationError) return validationError;
+  }
+
+  // Route to application service
   switch (name) {
-    case "sprite__config":
-      return handleConfig(args);
-    case "sprite__sheet":
-      return handleSheet(args);
-    case "sprite_generate_image":
-      return handleGenerateImage(args);
-    case "sprite__info":
-      return handleInfo();
-    case "sprite_cutout":
-      return handleCutout(args);
-    case "sprite_animation_sequence":
-      return generateAnimationSequence(args);
-    case "sprite_animation_list":
-      return { success: true, data: listAnimationSequences() };
-    case "sprite_generate_effect":
-      return generateEffect(args);
-    case "sprite_effect_list":
-      return { success: true, data: listEffects() };
-    case "sprite_generate_weapon":
-      return generateWeapon(args);
-    case "sprite_weapon_list":
-      return { success: true, data: listWeapons() };
-    case "sprite_batch_generate":
-      return batchGenerate(args);
-    case "sprite_batch_process":
-      return batchProcess(args);
-    case "sprite_generate_background":
-      if (args.regenerate_layer) return regenerateParallaxLayer(args);
-      return generateParallaxBackground(args);
-    case "sprite_preview_gif":
-      return handleGifPreview(args);
-    case "sprite_export_godot":
-      return handleGodotExport(args);
-    case "sprite_detect_animations":
-      return handleDetectAnimations(args);
-    case "sprite_session_list":
-      return handleSessionList();
-    case "sprite_edit":
-      return handleEdit(args);
-    case "sprite_autotile":
-      return handleAutotile(args);
-    case "sprite_video_to_sheet":
-      return handleVideoToSheet(args);
-    case "sprite_extract_video_frames":
-      return handleExtractVideoFrames(args);
-    case "sprite_style_list":
-      return { success: true, data: Object.entries(STYLE_PRESETS).map(([id, s]) => ({ id, name: s.name, description: s.description })) };
-    case "sprite_export_tpacker":
-      return (await handleEngineExport("tpacker", args));
-    case "sprite_export_aseprite":
-      return (await handleEngineExport("aseprite", args));
-    case "sprite_export_godot_scene":
-      return (await handleEngineExport("godot_scene", args));
-    case "sprite_palette_extract":
-      return handlePaletteExtract(args);
-    case "sprite_qc_report":
-      return handleQcReport(args);
-    case "sprite_godot_import":
-      return handleGodotImport(args);
-    case "sprite_godot_add_animation":
-      return handleGodotAddAnimation(args);
-    case "sprite_godot_wire_animations":
-      return handleGodotWireAnimations(args);
-    case "sprite_godot_scan":
-      return handleGodotScan(args);
+    case "sprite__config":              return configService(args);
+    case "sprite__sheet":               return sheetService(args);
+    case "sprite_generate_image":       return generateImageService(args);
+    case "sprite__info":                return infoService();
+    case "sprite_cutout":               return cutoutService(args);
+    case "sprite_animation_sequence":   return animationSequenceService(args);
+    case "sprite_animation_list":       return animationListService();
+    case "sprite_generate_effect":      return effectGenerateService(args);
+    case "sprite_effect_list":          return effectListService();
+    case "sprite_generate_weapon":      return weaponGenerateService(args);
+    case "sprite_weapon_list":          return weaponListService();
+    case "sprite_batch_generate":       return batchGenerateService(args);
+    case "sprite_batch_process":        return batchProcessService(args);
+    case "sprite_generate_background":  return backgroundService(args);
+    case "sprite_preview_gif":          return gifPreviewService(args);
+    case "sprite_export_godot":         return godotExportService(args);
+    case "sprite_detect_animations":    return detectAnimationsService(args);
+    case "sprite_session_list":         return sessionListService();
+    case "sprite_edit":                 return editService(args);
+    case "sprite_autotile":             return autotileService(args);
+    case "sprite_video_to_sheet":       return videoToSheetService(args);
+    case "sprite_extract_video_frames": return extractVideoFramesService(args);
+    case "sprite_style_list":           return styleListService();
+    case "sprite_export_tpacker":       return engineExportService("tpacker", args);
+    case "sprite_export_aseprite":      return engineExportService("aseprite", args);
+    case "sprite_export_godot_scene":   return engineExportService("godot_scene", args);
+    case "sprite_palette_extract":      return paletteExtractService(args);
+    case "sprite_qc_report":            return qcReportService(args);
+    case "sprite_godot_import":         return godotImportService(args);
+    case "sprite_godot_add_animation":  return godotAddAnimationService(args);
+    case "sprite_godot_wire_animations": return godotWireAnimationsService(args);
+    case "sprite_godot_scan":           return godotScanService(args);
     default:
-      return { success: false, error: `Unknown tool: ${name}` };
-  }
-}
-
-async function handleAutotile(args) {
-  try {
-    const result = await runPythonScript({
-      command: "autotile",
-      image_path: args.image_path,
-      tile_size: args.tile_size ?? [64, 64],
-      output_dir: args.output_dir || "./output/autotile",
-    });
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleVideoToSheet(args) {
-  try {
-    const result = await videoToSpriteSheet(args);
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleExtractVideoFrames(args) {
-  try {
-    const result = await extractVideoFrames(args);
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleEngineExport(type, args) {
-  try {
-    let result;
-    if (type === "tpacker") result = await exportTexturePacker(args);
-    else if (type === "aseprite") result = await exportAseprite(args);
-    else if (type === "godot_scene") result = await exportGodotScene(args);
-    return result;
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handlePaletteExtract(args) {
-  try {
-    return await extractPalette(args);
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleQcReport(args) {
-  try {
-    return await qcReport(args);
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleGodotImport(args) {
-  try {
-    return await godotImportSheet(args);
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleGodotAddAnimation(args) {
-  try {
-    return await godotAddAnimation(args);
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleGodotWireAnimations(args) {
-  try {
-    return await godotWireAnimations(args);
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-async function handleGodotScan(args) {
-  try {
-    return await godotScanProject(args);
-  } catch (err) {
-    return { success: false, error: err.message };
+      return err(ErrorCode.INVALID_ARGUMENT, `Unknown tool: ${name}`, { stage: 'validation' });
   }
 }
 
@@ -937,12 +684,26 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const result = await handleToolCall(request.params.name, request.params.arguments ?? {});
-  const text =
-    result.success
-      ? JSON.stringify(result.data ?? result, null, 2)
-      : `Error: ${result.error}`;
-  return { content: [{ type: "text", text }] };
+  const start = Date.now();
+  try {
+    const result = await handleToolCall(request.params.name, request.params.arguments ?? {});
+    // Ensure metrics are present
+    if (!result.metrics) result.metrics = { duration_ms: Date.now() - start };
+    else result.metrics.duration_ms = result.metrics.duration_ms || (Date.now() - start);
+    // Sanitize error messages — never leak API keys, auth headers, or vendor details
+    if (result.success === false && result.error?.message) {
+      result.error.message = sanitizeMessage(result.error.message);
+    }
+    const text = JSON.stringify(result, null, 2);
+    return { content: [{ type: "text", text }] };
+  } catch (err) {
+    const text = JSON.stringify({
+      success: false,
+      error: { code: 'INTERNAL_ERROR', message: sanitizeMessage(err.message), stage: 'internal', retryable: false },
+      metrics: { duration_ms: Date.now() - start },
+    }, null, 2);
+    return { content: [{ type: "text", text }] };
+  }
 });
 
 async function main() {
@@ -951,7 +712,14 @@ async function main() {
   console.error("[sprite-gen-mcp] Server running on stdio");
 }
 
-main().catch((err) => {
-  console.error("[sprite-gen-mcp] Fatal error:", err);
-  process.exit(1);
-});
+// Only start server when run directly (not imported as module)
+const isMainModule = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+if (isMainModule) {
+  main().catch((err) => {
+    console.error("[sprite-gen-mcp] Fatal error:", err);
+    process.exit(1);
+  });
+}
+
+// Export for contract testing
+export { TOOLS };

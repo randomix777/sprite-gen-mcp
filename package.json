@@ -8,7 +8,23 @@
     "sprite-gen-mcp": "server.js"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node test/test_all.js",
+    "test:unit": "node test/test_all.js",
+    "test:contract": "node test/contract_all.js",
+    "test:direct": "node test/direct_call.js",
+    "test:stability": "node --expose-gc test/stability.js",
+    "test:mcp": "node test/mcp_handshake.js",
+    "test:provider": "node test/provider_penetration.js",
+    "test:video": "node test/video_real.js",
+    "test:security": "node test/security_matrix.js",
+    "test:concurrency": "node test/sharp_concurrency.js",
+    "test:all": "node test/test_all.js && node test/contract_all.js && node test/direct_call.js && node test/mcp_handshake.js && node test/provider_penetration.js && node test/video_real.js && node test/security_matrix.js && node test/sharp_concurrency.js",
+    "test:commercial": "node test/commercial.js",
+    "bench": "node --expose-gc bench/bench.js",
+    "bench:single": "node --expose-gc bench/bench.js --scenario single",
+    "bench:concurrency": "node --expose-gc bench/bench.js --scenario concurrency",
+    "bench:batch": "node --expose-gc bench/bench.js --scenario batch"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

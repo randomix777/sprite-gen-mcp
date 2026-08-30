@@ -1,0 +1,16 @@
+[gd_resource type="SpriteFrames" format=3]
+resource = {
+  "frames" : {
+    "idle" : {
+      "texture" : ExtResource( 1 ),
+      "region" : Rect2i( 0 , 0, 64, 64 ),
+      "frame_count" : 2,
+      "loop" : true,
+      "frames" : [
+        { "texture_offset" : Vector2i( 0 , 0 ), "duration" : 125 },
+        { "texture_offset" : Vector2i( 64 , 0 ), "duration" : 125 },
+      ]
+    }
+  }
+}
+[ext_resource type="Texture2D" path="sprites/hero.png" id="1"]

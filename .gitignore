@@ -4,4 +4,5 @@ output/
 tmp/
 *.pyc
 __pycache__/
-package-lock.json
+tools/
+.memsearch/

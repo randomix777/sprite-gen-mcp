@@ -1,4 +1,4 @@
-﻿import json
+import json
 import sys
 import base64
 from PIL import Image
@@ -104,18 +104,18 @@ def cutout_and_validate(img, dist_threshold=60, corner_region=30, target_w=512, 
     br_ok = br <= 0.02
 
     validation = {
-        "size_ok": result.size == (target_w, target_h),
-        "mode_ok": result.mode == "RGBA",
-        "corners_ok": corners_ok,
-        "transparent_ratio_ok": tr_ok,
-        "border_ok": br_ok,
+        "size_ok": bool(result.size == (target_w, target_h)),
+        "mode_ok": bool(result.mode == "RGBA"),
+        "corners_ok": bool(corners_ok),
+        "transparent_ratio_ok": bool(tr_ok),
+        "border_ok": bool(br_ok),
         "corner_alphas": [int(c) for c in corners],
-        "transparent_ratio": round(tr * 100, 1),
-        "border_ratio": round(br * 100, 1),
+        "transparent_ratio": round(float(tr) * 100, 1),
+        "border_ratio": round(float(br) * 100, 1),
     }
-    all_ok = all([validation['size_ok'], validation['mode_ok'],
+    all_ok = bool(all([validation['size_ok'], validation['mode_ok'],
                   validation['corners_ok'], validation['transparent_ratio_ok'],
-                  validation['border_ok']])
+                  validation['border_ok']]))
 
     return result, {
         **validation,
@@ -269,16 +269,6 @@ def run_cutout(args):
         'validation': validation
     }
 
-if __name__ == '__main__':
-    encoded = sys.argv[1]
-    args = json.loads(base64.b64decode(encoded).decode())
-    cmd = args.pop('command', 'sprite_sheet')
-    if cmd == 'cutout':
-        result = run_cutout(args)
-    else:
-        result = generate_sprite_sheet(args)
-    print(json.dumps(result))
-
 
 # ─── Autotile generation ─────────────────────────────────────────────────────
 
@@ -321,61 +311,68 @@ def generate_autotile(image_path, tile_size, output_dir):
 
         result = arr.copy()
         exposed = [
-            (not has_top,    0),
-            (not has_bottom, h - 1),
-            (not has_left,   0),
-            (not has_right,  w - 1),
+            (not has_top,    'top'),
+            (not has_bottom, 'bottom'),
+            (not has_left,   'left'),
+            (not has_right,  'right'),
         ]
 
         # Darken exposed edges
         darken_amount = 40  # RGB value to subtract
-        for is_exposed, coord in exposed:
+        for is_exposed, side in exposed:
             if not is_exposed:
                 continue
-            if coord == 0:  # top or left
-                region = result[:6, :] if coord == 0 else result[:, :6]
-            else:  # bottom or right
-                region = result[-6:, :] if coord == h - 1 else result[:, -6:]
+
+            # Determine pixel coordinates for this edge
+            if side == 'top':
+                get_y = lambda dy: dy
+                get_x = lambda dx: dx
+                edge_len = w
+            elif side == 'bottom':
+                get_y = lambda dy: h - 6 + dy
+                get_x = lambda dx: dx
+                edge_len = w
+            elif side == 'left':
+                get_y = lambda dy: dy
+                get_x = lambda dx: dx
+                edge_len = h
+            else:  # right
+                get_y = lambda dy: dy
+                get_x = lambda dx: w - 6 + dx
+                edge_len = h
 
             # Darken the edge region
             dark_factor = np.clip(avg_edge - darken_amount, 0, 255).astype(np.uint8)
             light_factor = np.clip(avg_edge + 20, 0, 255).astype(np.uint8)
 
-            for y in range(region.shape[0]):
-                for x in range(region.shape[1]):
-                    alpha = result[
-                        (0 if coord == 0 else h - 6 + y),
-                        (0 if coord == 0 else w - 6 + x),
-                        3
-                    ]
-                    if alpha > 128:
-                        rgb = result[
-                            (0 if coord == 0 else h - 6 + y),
-                            (0 if coord == 0 else w - 6 + x),
-                            :3
-                        ].astype(np.float32)
-                        # Mix between dark and light based on distance from edge
-                        dist = min(y + 1, x + 1, 6) / 6.0
-                        blended = dark_factor * (1 - dist) + light_factor * dist
-                        result[
-                            (0 if coord == 0 else h - 6 + y),
-                            (0 if coord == 0 else w - 6 + x),
-                            :3
-                        ] = blended.astype(np.uint8)
+            for y in range(6):
+                for x in range(edge_len):
+                    if side in ('top', 'bottom'):
+                        py, px = get_y(y), get_x(x)
+                    else:
+                        py, px = get_y(x), get_x(y)
+                    if 0 <= py < h and 0 <= px < w:
+                        alpha = result[py, px, 3]
+                        if alpha > 128:
+                            rgb = result[py, px, :3].astype(np.float32)
+                            # Mix between dark and light based on distance from edge
+                            dist = (y + 1) / 6.0
+                            blended = dark_factor * (1 - dist) + light_factor * dist
+                            result[py, px, :3] = blended.astype(np.uint8)
 
         # Add outline on exposed edges
         outline_color = np.array([0, 0, 0, 200], dtype=np.uint8)
-        for is_exposed, coord in exposed:
+        for is_exposed, side in exposed:
             if not is_exposed:
                 continue
-            if coord == 0:
-                result[0, :, :3] = np.maximum(result[0, :3], outline_color[:3])
-            elif coord == h - 1:
-                result[-1, :, :3] = np.maximum(result[-1, :3], outline_color[:3])
-            elif coord == 0:
+            if side == 'top':
+                result[0, :, :3] = np.maximum(result[0, :, :3], outline_color[:3])
+            elif side == 'bottom':
+                result[-1, :, :3] = np.maximum(result[-1, :, :3], outline_color[:3])
+            elif side == 'left':
                 result[:, 0, :3] = np.maximum(result[:, 0, :3], outline_color[:3])
-            elif coord == w - 1:
-                result[:, -1, :3] = np.makedirs(result[:, -1, :3], outline_color[:3])
+            elif side == 'right':
+                result[:, -1, :3] = np.maximum(result[:, -1, :3], outline_color[:3])
 
         # Corner rounding: where two exposed edges meet, add a slight curve
         corners = [
