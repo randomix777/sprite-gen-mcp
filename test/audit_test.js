@@ -94,6 +94,50 @@ async function main() {
   // Crucially: total accepted+rejected must NOT exceed scanned count.
   assertFn(s.approved + s.rejected <= s.total_scanned, 'accepted+rejected never exceeds scanned');
 
+  // ── 7. manifest_path is REALLY validated (not just recorded) ──
+  const validManifest = {
+    schema_version: 1, prop_id: 'chair', display_name: 'Wooden Chair',
+    material_type: 'wood',
+    canvas_size: [128, 128], states: { intact: 'chair_intact.png', rubble: 'chair_rubble.png' },
+    cover: { height: 'low' },
+  };
+  const mPath = path.join(TMP, 'chair.manifest.json');
+  writeFileSync(mPath, JSON.stringify(validManifest));
+  const withManifest = await auditAssets({ input_path: grpDir, report_dir: path.join(TMP, 'report_m'), strict: true, asset_type: 'cover_prop', manifest_path: mPath });
+  assertFn(withManifest.success === true, 'audit with manifest_path succeeds');
+  assertFn(withManifest.data.manifest_validation && withManifest.data.manifest_validation.valid === true, 'valid manifest → manifest_validation.valid=true');
+
+  // An INVALID manifest must be recorded as invalid (no silent pass).
+  writeFileSync(path.join(TMP, 'bad.manifest.json'), JSON.stringify({ foo: 'bar' }));
+  const badManifest = await auditAssets({ input_path: grpDir, report_dir: path.join(TMP, 'report_bm'), strict: true, asset_type: 'cover_prop', manifest_path: path.join(TMP, 'bad.manifest.json') });
+  assertFn(badManifest.data.manifest_validation && badManifest.data.manifest_validation.valid === false, 'invalid manifest → manifest_validation.valid=false');
+  assertFn(Array.isArray(badManifest.data.manifest_validation.errors) && badManifest.data.manifest_validation.errors.length > 0, 'invalid manifest reports errors');
+
+  // ── 8. missing manifest_path file is reported as invalid ──
+  const missingManifest = await auditAssets({ input_path: grpDir, report_dir: path.join(TMP, 'report_mm'), strict: true, asset_type: 'cover_prop', manifest_path: path.join(TMP, 'nope.json') });
+  assertFn(missingManifest.data.manifest_validation && missingManifest.data.manifest_validation.valid === false, 'missing manifest_path → invalid');
+
+  // ── 9. reference_root drives consistency: a DIFFERENT intact reference changes result ──
+  const refDir = path.join(TMP, 'refroot');
+  mkdirSync(refDir, { recursive: true });
+  // A near-identical-but-distinct intact reference the consistency check should still accept.
+  writeFileSync(path.join(refDir, 'chair_intact.png'), await makeSprite(128, 128, { r: 95, g: 145, b: 205 }, 21));
+  const withRef = await auditAssets({ input_path: grpDir, report_dir: path.join(TMP, 'report_ref'), strict: true, asset_type: 'cover_prop', reference_root: refDir });
+  assertFn(withRef.success === true, 'audit with reference_root succeeds');
+  const refRub = withRef.data.assets.find(a => a.asset_path.includes('chair_rubble'));
+  assertFn(refRub && refRub.state_consistency && refRub.state_consistency.reference.includes('refroot'), 'consistency used reference_root as the reference source');
+
+  // ── 10. style_profile is actually applied (tileset tightens edge margin) ──
+  const tileDir = path.join(TMP, 'tiles');
+  mkdirSync(tileDir, { recursive: true });
+  writeFileSync(path.join(tileDir, 'tile_intact.png'), await makeSprite(128, 128, { r: 100, g: 150, b: 200 }, 6)); // only 6px margin
+  const tilesetAudit = await auditAssets({ input_path: tileDir, report_dir: path.join(TMP, 'report_tile'), strict: true, asset_type: 'tileset', style_profile: 'tileset' });
+  assertFn(tilesetAudit.data.params_used.style_profile === true, 'params_used.style_profile flagged true');
+  // tileset profile maxEdgeMarginPercent=0.01 → 6px/128 ≈ 4.7% margin → EDGE_MARGIN fails.
+  const tileAsset = tilesetAudit.data.assets[0];
+  const edgeRule = tileAsset && tileAsset.hard_failures;
+  assertFn(tileAsset && tileAsset.hard_failures.includes('EDGE_MARGIN'), 'tileset style profile tightened EDGE_MARGIN and rejected loose margin');
+
   console.log(`\nAUDIT RESULTS: ${passed} passed`);
   emitReport('audit', { assertions: passed, passed, failed: 0, startedAt: __startedAt });
   rmSync(TMP, { recursive: true, force: true });
