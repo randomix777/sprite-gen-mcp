@@ -39,18 +39,27 @@ async function makeSprite(w, h, color, pad) {
 }
 
 async function main() {
+  const godotPresent = !!findGodotExecutable();
   const sprite = await makeSprite(64, 64, { r: 100, g: 150, b: 200 }, 12);
   const spritePath = path.join(TMP, 'bed_intact.png');
   writeFileSync(spritePath, sprite);
 
-  // ── 1. findGodotExecutable: null in this env (no binary) ──
-  assertFn(findGodotExecutable() === null, 'findGodotExecutable returns null (no Godot installed)');
-  assertFn(process.env.GODOT4_BIN === undefined, 'GODOT4_BIN not set in env');
+  // ── 1. findGodotExecutable: honors GODOT4_BIN when set, else null ──
+  if (process.env.GODOT4_BIN) {
+    assertFn(godotPresent === true, 'findGodotExecutable finds GODOT4_BIN when set');
+  } else {
+    assertFn(findGodotExecutable() === null, 'findGodotExecutable returns null (no Godot installed)');
+    assertFn(process.env.GODOT4_BIN === undefined, 'GODOT4_BIN not set in env');
+  }
 
-  // ── 2. runGodotHeadless honest unavailable (not fake success) ──
+  // ── 2. runGodotHeadless: honest about availability (no fake success) ──
   const headless = await runGodotHeadless(TMP, 'bed_intact.tscn');
-  assertFn(headless.available === false, 'runGodotHeadless reports available:false when no binary');
-  assertFn(headless.loaded === false, 'headless loaded:false (no silent pass)');
+  if (godotPresent) {
+    assertFn(headless.available === true, 'runGodotHeadless reports available:true when binary present');
+  } else {
+    assertFn(headless.available === false, 'runGodotHeadless reports available:false when no binary');
+    assertFn(headless.loaded === false, 'headless loaded:false (no silent pass)');
+  }
 
   // ── 3. exportGodotCoverProp: self-contained scene, real texture copy ──
   const out = path.join(TMP, 'godot_out');
@@ -103,17 +112,31 @@ async function main() {
   }
   assertFn(markerCount === 4, `all 4 markers emitted (got ${markerCount})`);
 
-  // ── 4. Full pipeline WITH godot_project_path must NOT approve when engine absent ──
-  const cpOut = path.join(TMP, 'cp_out');
-  mkdirSync(cpOut, { recursive: true });
-  // Stub generateImage for the pipeline via env-free injection is not exposed, so
-  // we feed an existing image as intact/rubble by writing tiny state files and
-  // calling generateCoverProp with a mocked image generator through args is not
-  // supported; instead validate the gate contract directly: given a real exported
-  // scene but unavailable Godot, the final verdict must be REVIEW_REQUIRED.
-  // (Covered by generateCoverProp integration below using a local file generator
-  //  is out of scope here; the gate semantics are asserted via runGodotHeadless.)
-  assertFn(headless.available === false, 'gate: Godot unavailable → cannot auto-APPROVE');
+  // ── 4. REAL Godot link-load: import the exported scene headlessly ──
+  // If Godot is present, the engine is actually invoked. Two honest outcomes:
+  //   (a) it confirms the load      → loaded === true  (real PASS)
+  //   (b) it hangs / errors / times out → loaded === false (NOT verified → REVIEW)
+  // Either way the call MUST terminate (hard timeout in runGodotHeadless) and the
+  // result is a real boolean — never a hang, never a fake success.
+  const relScene = path.basename(scene.data.scene_path);
+  const realHeadless = await runGodotHeadless(scene.data.project_root, relScene);
+  if (godotPresent) {
+    assertFn(realHeadless.available === true, 'Godot binary available for real link-load');
+    assertFn(typeof realHeadless.loaded === 'boolean', 'headless returns a definite loaded boolean (no hang)');
+    // In this environment Godot headless editor hangs on scene import, so the
+    // bounded call resolves loaded:false → the export's godot_valid must reflect
+    // "not verified" (undefined from export without project, or 'unavailable'
+    // when a project was supplied). The gate stays CLOSED, which is correct.
+    if (realHeadless.loaded === true) {
+      assertFn(realHeadless.exitCode === 0, `headless import exit code 0 (got ${realHeadless.exitCode})`);
+    } else {
+      assertFn(scene.data.godot_valid === undefined || scene.data.godot_valid === 'unavailable',
+        'export not falsely marked APPROVED when engine cannot verify');
+    }
+  } else {
+    assertFn(realHeadless.available === false, 'gate: Godot unavailable → cannot auto-APPROVE');
+    assertFn(scene.data.godot_valid === undefined, 'export without godot_project_path leaves godot_valid undefined (no fake verified)');
+  }
 
   console.log(`\nGODOT GATE RESULTS: ${passed} passed`);
   emitReport('godot_gate', { assertions: passed, passed, failed: 0, startedAt: __startedAt });

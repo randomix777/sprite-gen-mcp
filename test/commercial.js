@@ -49,6 +49,10 @@ const SUITES = [
 
 /** Detect a usable Godot 4 binary. Returns null if none. */
 function findGodotBinary() {
+  // Honor an explicit override first (the same contract the suites use).
+  if (process.env.GODOT4_BIN && existsSync(process.env.GODOT4_BIN)) {
+    return process.env.GODOT4_BIN;
+  }
   const candidates = ['godot', 'godot4', 'Godot', 'Godot4',
     '/usr/local/bin/godot', '/usr/bin/godot',
     process.env.LOCALAPPDATA + '\\Godot\\godot.exe',
