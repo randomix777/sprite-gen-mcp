@@ -343,4 +343,4 @@ for (const rule of e2eQc.data.rules) {
 // ─── Summary ────────────────────────────────────────────────────────────────
 console.log(`\nCOVER PROP RESULTS: ${passed}/${passed + failed} passed`);
 emitReport('cover_prop', { assertions: passed + failed, passed, failed, startedAt: __startedAt });
-process.exit(failed > 0 ? 1 : 0);
+import('fs').then(({ rmSync }) => { try { rmSync(TMP, { recursive: true, force: true }); } catch (_) {} }).finally(() => process.exit(failed > 0 ? 1 : 0));

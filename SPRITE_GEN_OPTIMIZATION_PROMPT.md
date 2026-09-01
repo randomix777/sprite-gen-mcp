@@ -11,6 +11,466 @@
 - 不使用伪实现。参考图、批量生成、质量检测和 Godot 导出必须通过真实数据路径验证。
 - 每完成一个阶段运行相关测试；最终运行完整测试并报告结果。
 
+## 当前验收结论与本轮强制整改范围
+
+上一轮提交虽然报告 `test:commercial` 通过并宣称 `READY`，但静态审计和实际测试表明严格资产门禁尚未闭环。本轮不要重新评估这些问题是否存在，直接把下列问题视为已确认缺陷并逐项修复。任何一项未完成，最终结论必须是 `BLOCKED`，不得输出 `READY`。
+
+### 2026-08-31 最新复核基线：BLOCKED
+
+本节是后续实现与验收的当前基线；与文档中更早的通过记录或完成声明冲突时，以本节和实际重新执行的测试结果为准。
+
+已实际执行：
+
+```powershell
+npm run test:all
+npm run test:commercial
+node test/e2e_cover_prop.js
+```
+
+当前结果：
+
+- `test:all` 退出码为 `0`；核心单元、契约、直接调用、MCP 握手、Provider mock、视频、安全和 Sharp 并发套件均通过。
+- `test:commercial` 退出码为 `1`，19 个套件中 17 个 `PASS`、1 个关键套件 `FAIL`、1 个套件 `BLOCKED`，最终 verdict 为 `BLOCKED`。
+- `e2e` 为 `14 passed / 6 failed / 20 total`。CoverProp 的 `intact` 成功，但 `rubble` 失败，最终状态为 `REJECTED`；失败返回缺少 `manifest_path` 和 `candidates_dir`，测试继续对 `undefined` 调用 `existsSync/readFileSync` 并崩溃。
+- `godot_gate` 因当前机器未找到 Godot 4 可执行文件而 `BLOCKED`，尚无真实 Godot headless 导入和场景加载通过证据。
+- 安全矩阵明确报告 `gifPreviewService` 未验证 `output_path`。不得因为该矩阵当前将用例计为通过而忽略此漏洞。
+- E2E 执行后遗留 `test/tmp_e2e/`；商业验收要求的零临时产物泄漏尚未满足。
+
+下一轮必须先关闭以下阻塞项：
+
+1. 定位并修复 mock Agnes CoverProp 流程中 `rubble` 被拒绝的根因；不得放宽硬门禁或把预期改成 `REJECTED` 来制造绿测。
+2. 统一 CoverProp 成功、拒绝、审查和异常返回结构。失败结果也必须提供可用的状态目录与诊断/manifest 路径，或者提供明确的可空契约；调用方和测试不得对缺失路径继续执行文件 API。
+3. E2E 必须逐阶段断言并安全终止后续依赖断言，既保留首个真实失败原因，也不能因测试代码的二次异常掩盖生产缺陷。
+4. 为 `gifPreviewService.output_path` 接入与其他写服务相同的路径穿越、绝对路径、UNC、覆盖、输入输出同路径及目标类型校验，并增加行为测试。
+5. 所有测试临时目录使用唯一隔离目录并在成功、失败和异常路径中清理；`artifact_cleanup` 必须能检测到 E2E 遗漏，而不是在检查前替被测套件删除证据。
+6. 在安装 Godot 4 的环境实际运行 headless import/load 门禁；缺少 Godot 时最终状态保持 `BLOCKED`，不得降级为 `PASS` 或 `READY`。
+
+修复后最低复核命令为：
+
+```powershell
+node test/e2e_cover_prop.js
+npm run test:security
+npm run test:artifact_cleanup
+npm run test:godot_gate
+npm run test:all
+npm run test:commercial
+git status --short
+```
+
+只有 `test:commercial` 的全部 critical suite 实际通过、Godot 4 门禁有真实执行证据、断言无 skip、且复核后没有测试泄漏产物时，才允许输出 `READY`。
+
+### A. 修复会造成误批准的 CoverProp 发布链路
+
+当前 `lib/cover_prop.js` 只把 intact 的规则写入 `results.qc_rules`，rubble 失败仅设置 `stateData.rejected`，最终却只用 intact 规则计算 `allPassed`。这会导致必需状态失败后整套资产仍返回 `APPROVED`。
+
+必须改为：
+
+- 为每个请求状态保存独立的 `generation_result`、`file_qc`、`state_consistency_qc`、`evidence` 和最终状态。
+- `intact` 文件门禁失败立即终止；任何必需变体生成失败、文件门禁失败或一致性门禁失败，整套资产必须 `REJECTED`。
+- 任一状态为 `REVIEW_REQUIRED`，整套资产只能为 `REVIEW_REQUIRED`。
+- 最终状态由一个唯一、默认拒绝的聚合函数计算，不能依赖可遗漏的数组或空数组 `every()`。
+- 聚合器必须显式验证：请求状态全部存在、所有结果对象成功、规则数组非空、所有测量值有限、证据文件存在、manifest 校验通过、Godot 门禁通过（如请求导出）。
+- 不允许返回体显示 `APPROVED`，而 manifest 内仍保存旧的 `REJECTED`；manifest 必须在最终判定后构建或原子更新，并再次校验。
+
+增加至少以下回归测试：
+
+1. intact 通过、rubble 文件 QC 失败 → 整套 `REJECTED`。
+2. intact 通过、rubble 一致性失败 → 整套 `REJECTED`。
+3. 任一状态 `REVIEW_REQUIRED` → 不得返回或写入 `APPROVED`。
+4. 变体缺失、Provider 返回空图片、QC 返回 error、规则数组为空、测量值为 `NaN` → 整套 `REJECTED`。
+5. 返回状态、manifest 状态、目录位置三者必须一致。
+
+### B. 修复状态一致性门禁本身
+
+当前 `lib/qc.js` 中 `computeBodyBboxFromPath()` 是异步函数，但调用处没有 `await`；`qcStateConsistency()` 调用 `addRule()` 时没有传入 evidence 对象，也会触发异常。该门禁目前没有真正接入 CoverProp 主流程。
+
+必须改为：
+
+- 正确等待两张图片的解码、mask 和 bbox 计算。
+- `addRule` 不得依赖隐式可空参数；evidence 缺失属于编程错误并应在顶层变成 `REJECTED`，不能吞掉。
+- 使用真实 alpha mask 计算轮廓 IoU，不能用两个 bounding box 的重叠面积冒充 silhouette IoU。
+- `rubble` 使用独立规则，不强制 `0.55` IoU；但必须检测接地点、材料色板、碎片空间范围和风格置信度。
+- 将状态一致性结果真实接入最终聚合器。
+- 增加正常、中心漂移、接地点漂移、镜像、缩放突变、画布不同、色板漂移和损坏图片测试；断言具体测量值和规则 ID。
+
+### C. 严格隔离 candidates、review、rejected、approved
+
+当前流程开始时就创建 `approved/<prop_id>`，并在最终判定前把 Godot 场景写入其中。这属于正式目录污染。
+
+必须改为：
+
+- 流程开始时只允许创建本次 session 的 candidates 临时目录。
+- `REJECTED` 和 `REVIEW_REQUIRED` 的归档只在判定后写入对应版本目录。
+- 在所有图片、manifest、证据和 Godot 门禁完成之前，禁止创建或写入 approved 目标目录。
+- 发布使用同一文件系统内的临时目录加原子 rename；发布前再次检查目标不存在。
+- 默认禁止覆盖。若显式 `replace=true`，先创建可恢复的版本备份，再原子替换；任何中途失败必须保持旧版本完整。
+- Godot 验证场景先写 candidates 验证目录；验证通过后才随整套资产发布。
+- 测试必须在每一种失败和异常注入场景后断言 approved 路径完全不存在，而不只是断言没有 PNG。
+
+### D. 重新实现缺失的 QC 规则，而不是仅修改名称
+
+当前主体检测只是扫描全部 `alpha > 32` 像素形成一个整体 bbox；没有最大连通区域、孤立噪点、RGB 泄漏、白边、彩色光晕或锯齿检测。棋盘格检测只检查第 1 行的相邻像素，无法可靠发现常见大格棋盘。声明的文件大小、最大尺寸和期望画布也没有全部执行。
+
+必须实现并验证：
+
+- 从实际 `info.channels` 派生像素步长；RGB、RGBA、灰度和灰度 alpha 要么正确处理，要么明确拒绝。
+- 校验真实 PNG 格式、完整解码、文件字节数、宽高、总像素数、期望画布，且所有失败都影响硬门禁状态。
+- 二值 alpha mask、最大连通区域、次要区域面积、孤立噪点比例和真实主体 bbox。
+- 二维、多尺度周期检测；至少能识别 1、2、4、8、16、32、64 像素格的灰白/彩色棋盘，不能只采样一行。
+- 基于透明边缘邻域的 RGB 泄漏、白色毛边和彩色色溢检测，并输出污染热图。
+- 对反锯齿边缘计算合理的半透明带统计；检测无法计算时拒绝，不能用零值代替。
+- 文件大小上限、最大尺寸、`canvas_width/canvas_height` 必须真正进入规则和最终判定。
+- 每一个阈值都必须有边界测试：阈值以下、刚好等于阈值、阈值以上。
+
+### E. 修复证据生成的异步和失败处理
+
+当前 `generateEvidenceImage()` 返回 Promise，但调用处没有 `await`，异常还被静默吞掉。这可能让 `evidence_path` 变成 Promise/空对象，并在证据尚未落盘时提前返回。
+
+必须改为：
+
+- `await` 所有证据生成任务，并在返回前验证文件存在、可解码、尺寸正确。
+- 每条适用规则关联明确证据路径；至少生成 mask、bbox、边距、污染热图和多背景预览。
+- 禁止空 `catch`。证据生成失败在严格模式下必须令资产 `REJECTED`，同时返回安全、可诊断的错误信息。
+- JSON 序列化测试必须证明 `evidence_path` 是字符串，不是 Promise、`{}`、`null` 或不存在的路径。
+
+### F. Godot 门禁必须执行真实 Godot，而不是只写文本
+
+当前生成场景存在以下已确认风险：纹理使用 `res://<basename>` 但没有复制到对应位置；固定脚本 `res://scripts/cover_prop.gd` 未保证存在；`CoverZone` 写入可能没有脚本声明的自定义属性；碰撞框使用固定画布比例而非主体 bbox；`godot_project_path` 没有形成完整验证闭环。
+
+必须改为：
+
+- 明确选择“生成自包含场景”或“依赖项目脚本场景”。若依赖脚本，先验证脚本存在且属性契约匹配；否则不要引用不存在的脚本或写入未知属性。
+- 把纹理复制到 candidates 中的 Godot 验证项目内，使用真实、可解析的 `res://` 相对路径。
+- 正确计算 `load_steps`、ext_resource/sub_resource、节点属性和资源引用。
+- 碰撞、CoverZone 和 Marker 坐标必须从 QC 的主体 bbox 与 ground anchor 推导，并验证透明覆盖比例。
+- 若系统可找到 Godot 4 可执行文件，必须运行 headless import/load 验证并以非零退出码判失败。
+- 若请求 `godot_project_path` 但环境无法运行 Godot，严格模式下不得自动 `APPROVED`，应为 `REVIEW_REQUIRED` 或明确的外部验证阻塞；测试不得伪造 Godot 已加载。
+- 增加含空格路径、缺失纹理、缺失脚本、非法属性、越界 Marker、空碰撞和有效场景夹具。
+
+### G. 补全资产审计和受控重生成，不得把基础扫描器包装成完成品
+
+当前 `sprite_audit_assets` 只遍历图片并运行单图 `qcGate`；`asset_type`、`strict`、`report_dir` 没有真正生效，也没有状态分组、Godot 引用、证据报告、哈希保护或重生成清单。
+
+必须完整实现本文后续“存量美术资产审计与受控重生成”章节，并特别保证：
+
+- 输入根目录先经过路径安全验证；限制递归深度、文件数、总大小并防止 symlink/junction 逃逸。
+- `strict`、`asset_type`、`report_dir`、include/exclude、manifest 和 Godot 参数真实生效。
+- 审计前后记录输入文件路径、大小、mtime 和 SHA-256，证明只读。
+- 输出 JSON、Markdown、CSV 和证据，不得只返回内存计数。
+- 新增并注册独立的 `sprite_regenerate_rejected_assets`；不得由 audit 隐式生成。
+
+### H. 修复结果协议遗漏并强化测试可信度
+
+当前 `lib/background_gen.js` 仍在多个路径先检查 `gen.images`，会把统一结构 `result.data.images` 的成功结果误判失败。必须全仓搜索所有旧式直接读取并统一改用唯一解包函数。
+
+测试禁止以下“存在性冒充行为验证”的写法：
+
+- 仅断言函数 `typeof === 'function'` 就声称参考图已传入。
+- 仅断言 capability 配置字段为 `true` 就声称供应商支持该能力。
+- 使用 `result.success || result.data`、`result?.success || !result?.error` 等弱断言。
+- mock 永远返回成功，却没有检查实际请求体、文件输出和失败分支。
+- 新测试单独运行通过，但没有加入 `test:commercial`。
+
+Agnes 参考图测试必须拦截真实 HTTP 请求构造，断言请求体确实包含可用的参考图数据、格式正确、元数据准确；不支持能力的供应商必须测试明确拒绝。CoverProp 测试必须真实写入合成 PNG、运行 QC、检查目录和 manifest，并尽可能让 Godot headless 实际加载。
+
+### I. 商业测试与完成报告的防误报要求
+
+- 增加 `test:qc` 和 `test:regression` npm scripts，并把二者作为 `test:commercial` 的 critical suite。
+- `test:commercial` 必须至少包含 QC 夹具、CoverProp 端到端、状态一致性、资产审计、受控重生成和 Godot 门禁。
+- critical suite 出现 skip、未安装必需本地依赖、证据缺失或测试数为零时必须返回非零退出码；真实供应商 API 测试可以明确标为 external，但不能替代本地 mock 请求契约测试。
+- 最终报告必须列出每个 suite 的测试数量、失败数、跳过数、耗时和退出码，不得只写总计数字。
+- 最终报告必须提供至少一个合格资产和每类不合格夹具的规则 ID、实测值、输出目录及证据路径。
+- 最终报告必须附上一次“rubble 失败阻止整套发布”和一次“Godot 加载失败阻止发布”的实际测试输出摘要。
+- README 必须记录两个生成/审计工具、重生成工具、三态语义、目录生命周期、供应商能力限制和 Godot 外部依赖。
+- 所有已确认问题修复并完成上述证据前，最终报告标题和 verdict 必须使用 `BLOCKED` 或 `NOT READY`。
+
+## 第二次验收新增阻塞项（必须在上一轮整改基础上继续修复）
+
+第二次实际验收中，`npm run test:qc`、`npm run test:regression` 和 `npm run test:commercial` 虽然全部返回成功，但仍发现以下确定性缺陷。这证明当前测试存在“代码没有真正执行、仅检查符号存在、错误测量始终为零仍通过”的假绿问题。本轮必须修复实现与测试，不能只调整报告文字或增加相同类型的浅层断言。
+
+### J. 修复 alpha 数据布局与连通区域恒为零
+
+当前 `lib/qc.js` 已把 RGBA alpha 提取为长度 `w*h` 的单通道数组，但 `computeConnectedComponents()` 仍判断：
+
+```js
+alphaData.length < w * h * 4
+```
+
+这会让所有正常图片直接返回 `{mainArea:0, noiseArea:0, noiseRatio:0}`，导致孤立噪点永远放行。
+
+要求：
+
+- 在 QC 内定义唯一、明确的像素数据结构：原始交错 buffer、channels、单通道 alpha mask，不得让不同 helper 猜测布局。
+- `computeConnectedComponents(alphaMask,w,h)` 必须严格要求 `alphaMask.length === w*h`；不匹配时抛出可诊断错误并令 QC `REJECTED`。
+- 主体 bbox 必须来自最大连通区域，而不是把所有 alpha 噪点合并进整体 bbox。
+- 返回每个连通区域的面积、bbox、是否为允许独立部件，并生成组件标色证据图。
+- BFS/队列不得使用会在百万像素图上产生明显退化的反复 `Array.shift()`；使用索引队列、typed array 或等价线性实现。
+- 测试必须创建“一个合格主体 + 若干真实孤立小点”，断言 `main_area`、`noise_area`、`noise_ratio` 的具体值，并分别覆盖阈值下、等于阈值、阈值上。
+- 禁止只断言 `CONNECTED_COMPONENTS` 规则存在。
+
+### K. 修复 CoverProp 成功路径的确定性崩溃
+
+当前 `lib/cover_prop.js` 把 `manifestValidCheck` 声明为 `const`，随后又重新赋值。真实流程走到 manifest 阶段会抛出 `TypeError: Assignment to constant variable`，但现有测试没有调用主流程，因此未发现。
+
+要求：
+
+- 删除无意义的预设 `{valid:true}`，构建 manifest 后直接使用真实 `validateCoverPropManifest()` 结果。
+- 最终聚合必须在 manifest 验证和可选 Godot 验证之后执行，不能先用硬编码 `true` 算 finalStatus。
+- manifest 中的 `qc_status` 必须来自最终聚合结果，不允许默认值、旧值或构建时尚未确定的值。
+- 捕获主流水线最外层异常，清理未完成的 staging，返回统一错误；不得让 MCP 进程崩溃。
+- 新增真正的端到端测试：mock `generateImage()` 返回合成 PNG，随后真实调用 `generateCoverProp()`，运行 intact QC、rubble QC、一致性、manifest 和发布逻辑。
+- 端到端测试必须覆盖成功、intact 拒绝、rubble 拒绝、一致性拒绝、manifest 无效、Godot 失败、Provider 空结果和异常抛出。
+
+### L. 证据生成失败必须可观测且默认拒绝
+
+当前 `generateEvidenceImage()` 尾部仍有 `.catch(() => null)`，它会在错误到达 `qcGate` 外层前吞掉异常。因此外层所谓“证据失败硬拒绝”不会生效。
+
+要求：
+
+- 删除所有空 catch、`.catch(() => null)` 和把异常转换为正常空值的路径。
+- 证据 helper 失败时保留安全错误码、阶段和原因，由 qcGate 添加失败规则并将状态设为 `REJECTED`。
+- 严格模式下，只要某条适用规则缺少证据文件、文件不存在、无法解码或尺寸不符，最终不得批准。
+- 对证据写入注入失败（无效输出路径、Sharp mock 抛错、磁盘写入失败），断言 QC 返回 `REJECTED` 和 `EVIDENCE_GENERATION`。
+- 测试必须读取证据文件并解码，不得只接受 `null || string`。
+- `APPROVED` 资产也必须生成并验证规定的发布证据集；不能因为所有规则通过就完全没有证据。
+
+### M. 补齐文件完整性门禁并让失败真正影响 verdict
+
+当前 `FILE_DECODE` 只判断最小宽高，声明的 `maxFileSizeBytes`、`maxDimensions`、期望画布和 PNG 格式没有完整执行；该规则失败后也没有统一设置硬失败。
+
+要求：
+
+- 将文件规则拆成或明确输出：`FILE_FORMAT`、`FILE_SIZE`、`DIMENSIONS_RANGE`、`CANVAS_MATCH`、`TOTAL_PIXELS`、`DECODE_COMPLETE`。
+- 使用真实文件 stat、Sharp metadata 和完整 decode 结果；家具门禁默认只接受 PNG。
+- `canvas_width/canvas_height` 提供时必须严格匹配，除非 style profile 明确允许容差。
+- 所有规则通过统一 `recordHardRule()` 或等价机制更新 verdict，避免添加了失败规则却忘记设置 `hasHardFailure`。
+- 所有 measured value 必须是有限数值；undefined、null、NaN、Infinity 直接失败。
+- 增加过小、刚好最小、正常、刚好最大、超最大、画布不匹配、超文件大小、损坏/截断 PNG 和伪扩展名夹具。
+
+### N. 禁止在状态一致性规则中保留占位成功
+
+当前实现仍包含：
+
+```js
+const rubbleGroundOk = true;
+const rubblePaletteCheck = { checked: false, score: 0 }; // TODO
+```
+
+要求：
+
+- 删除所有固定 true、checked:false 却不阻塞发布、TODO 占位测量和伪造零值。
+- `qcStateConsistency` 输入必须包含或推断明确的 `variant_type`，为 non-destructive 与 rubble 使用不同策略。
+- rubble 仍必须检查画布、接地点允许范围、材料主色/色板距离、碎片总体空间位置、明显镜像/视角变化和风格置信度。
+- 无法计算色板或特征时至少 `REVIEW_REQUIRED`；检测异常则 `REJECTED`。
+- 每个一致性规则输出 `checked:true`、真实测量、阈值和证据；不适用规则必须标为 `not_applicable` 并说明原因，不能伪装通过。
+
+### O. 完整实现资产审计，不得保留未使用参数
+
+当前 `sprite_audit_assets` 仍只遍历图片调用单图 QC，`asset_type`、`report_dir` 等参数没有真实作用。
+
+要求：
+
+- 未实现的公开参数不能留在 MCP schema 中冒充能力：要么完整实现，要么从 schema 删除并明确限制；本任务要求按前文规格完整实现。
+- 对 `input_path`、`report_dir`、Godot 根目录分别执行路径安全验证，确保报告目录不在被审计输入内部造成递归扫描。
+- 限制 `max_depth`、`max_files`、`max_total_bytes`，检测 symlink/junction/reparse point，禁止逃逸扫描根目录。
+- 审计识别 manifest 和状态命名，将同一资产的 intact/rubble/open/empty 分组，并执行整套一致性门禁。
+- 审计前后计算 SHA-256、大小和 mtime；任何输入变化令审计失败。
+- 真实写入 `asset_audit.json`、`asset_audit.md`、CSV 和证据索引，并在返回 artifacts 中列出。
+- 测试必须验证参数实际改变行为，不能只确认工具已注册。
+
+### P. 修复重生成工具中的虚假参数和文件覆盖风险
+
+当前 `lib/regenerate.js` 接收 `replace`，但没有使用；`approve_after_gate=true` 只修改返回状态，没有真正安全发布；多个资产共享 `attempt_1/` 目录，相同文件名可能互相覆盖。
+
+要求：
+
+- 每个资产使用稳定且安全的唯一目录，例如 `<asset_hash>/attempt_<n>/`，不得只按尝试次数分目录。
+- 输出文件名碰撞必须被检测并拒绝，不能静默覆盖。
+- `approve_after_gate=false` 时，即使 QC 通过也必须明确进入 review/candidates，返回状态与目录一致。
+- `approve_after_gate=true` 必须复用 CoverProp 的统一发布器，且只有完整资产套件全部通过才发布。
+- `replace=false` 时目标存在必须拒绝；`replace=true` 必须生成内容哈希/时间戳备份、验证备份哈希，然后原子替换。
+- 若当前版本不更新 Godot 引用，就不要声称支持；若实现更新，必须备份、临时文件写入、语法验证和原子替换。
+- 生成新旧 SHA-256、bbox、透明层、色板、接地点和规则差异报告。
+- `max_provider_requests` 必须在每次请求前强制执行，包括重试和不同资产。
+- 参数 `replace`、`approve_after_gate`、`rule_ids`、`asset_paths`、最大尝试和 dry-run 均要有行为断言。
+
+### Q. 重写浅层测试，商业套件不得因“符号存在”而通过
+
+以下现有测试模式必须删除或升级：
+
+- `test/qc_test.js` 的噪点测试仅断言规则存在；必须断言真实测量和拒绝。
+- `test/cover_prop_test.js` 的 Godot 测试仅断言 `typeof exportGodotCoverProp === 'function'`；必须真实导出并让 Godot headless 加载。
+- `test/regression.js` 的 Agnes 测试仍只断言 `generateImage` 是函数；必须拦截并检查真实请求体。
+- 直接测试 `computeAssetStatus()` 不能代替调用 `generateCoverProp()` 的端到端测试。
+
+商业测试器还必须：
+
+- 捕获每个 suite 的断言总数、失败数和 skip 数；无法解析结果或断言数为零时失败。
+- 不允许 suite 自己 `process.exit(0)` 但没有执行目标路径。
+- 对 Godot 等必需本地门禁检查可执行文件；缺失时商业 verdict 必须是 `BLOCKED`，不能继续输出 `READY`。
+- 在输出 `READY` 前运行一次独立 smoke test，真实调用 CoverProp 主流程并检查最终目录、manifest 和证据。
+- 将临时目录放在系统或测试专用临时根，并在成功/失败后清理；仓库不得残留 `test/tmp_*`、`test_tmp.mjs` 或生成证据。
+- `git diff --check` 必须无错误；工作树中的测试产物必须为零。
+
+第二次验收的最低复核命令至少包括：
+
+```powershell
+npm run test:qc
+npm run test:cover_prop
+npm run test:regression
+npm run test:commercial
+git diff --check
+git status --short
+```
+
+最终报告除原有要求外，还必须给出：
+
+- `generateCoverProp()` 端到端成功路径确实执行到发布的证明；
+- 连通区域夹具的真实 `main_area/noise_area/noise_ratio`；
+- 证据生成故障注入导致 `REJECTED` 的输出；
+- audit 运行前后输入哈希完全一致的证明；
+- 两个同名资产重生成不会互相覆盖的证明；
+- 测试结束后仓库不存在临时测试产物的证明。
+
+## 第三次验收新增阻塞项（14/14 PASS 仍不得判定 READY）
+
+第三次实际复核确认 `npm run test:commercial` 返回退出码 `0` 并报告 `14/14 PASS`，但关键发布路径仍存在确定性缺陷，且多条断言没有执行目标代码。以下问题均按已确认缺陷处理；不要只更新测试文案、增加函数存在性断言或继续沿用 `READY` 报告。所有项目关闭前，商业 verdict 必须为 `BLOCKED / NOT READY`。
+
+### R. 修复 E2E 测试中的跳过式假通过
+
+当前 `test/e2e_cover_prop.js` 存在三处直接造成假绿的问题：
+
+- manifest 路径使用 `path.join(e2eDir, 'candidates', path.basename(e2eDir), 'manifest.json')`，但真实 session 名为 `cover_<timestamp>`，因此该路径恒不正确；后续又用 `if (existsSync(manifestPath))` 包住全部断言，导致 manifest 验证零执行仍通过。
+- 最终状态断言接受 `APPROVED || REVIEW_REQUIRED`，不能证明自动发布成功。
+- 调用 `generateCoverProp()` 时没有传入 `godot_project_path`，却在文件头声称覆盖 `manifest → Godot → publish` 全链路。
+
+必须改为：
+
+- 直接使用 `e2eResult.data.manifest_path`、`candidates_dir`、`approved_dir` 和 `session_id`，每个路径都先强制断言为非空字符串、位于预期根目录、真实存在，再读取内容；禁止用可选 `if (existsSync(...))` 跳过必需断言。
+- 商业成功 E2E 必须严格断言 `qc_status === APPROVED`；另设独立用例验证 `REVIEW_REQUIRED` 绝不发布。
+- 成功用例必须传入真实临时 Godot 项目并证明 Godot 门禁被调用；Godot 缺失时该用例应明确失败或让商业套件 `BLOCKED`，不能静默降级。
+- 为 E2E 增加断言计数下限，并断言 manifest 内状态、返回状态、实际目录状态三者完全一致。
+- 删除随机色值对断言结果的影响；合成夹具必须确定性生成，连续运行多次结果一致。
+
+### S. Godot 导出目前不是有效门禁
+
+当前 `lib/cover_prop.js` 中 `godot_project_path` 仅作为未使用参数继续传递。生成场景固定引用 `res://scripts/cover_prop.gd`，仓库和测试项目中并不存在该脚本；纹理路径固定为 `res://<basename>`；`CoverZone` 还写入 `cover_height_value` 未声明属性。更严重的是，Godot 导出失败时主流程没有设置失败状态，最终聚合仍只检查图片状态和 manifest，可继续发布为 `APPROVED`。
+
+必须改为：
+
+- 将 Godot 验证结果作为 `computeAssetStatus()` 的显式必需输入；只要请求了 `godot_project_path`，导出失败、资源缺失、headless 导入失败或场景加载失败都必须阻止 `APPROVED`。
+- `exportGodotCoverProp()` 必须真正使用并验证 `godot_project_path/project.godot`，将纹理和场景放入受控的候选验证目录，并按项目根计算 `res://` 路径。
+- 第一版优先生成不依赖外部脚本的自包含有效场景；若必须使用 `cover_prop.gd`，同时生成/复制脚本并验证 `@export` 属性契约，不能引用未知脚本或未知属性。
+- `load_steps` 必须等于真实外部与子资源数量要求；所有 ext_resource、sub_resource ID 必须唯一并可解析。
+- Godot 门禁结果必须包含可执行文件路径、版本、命令、退出码、stdout/stderr 摘要、导入结果和加载结果，敏感路径按需脱敏。
+- 本环境本次复核没有找到 Godot 可执行文件，因此当前机器不得输出“Godot 已验证”或商业 `READY`；应报告明确外部阻塞。
+
+### T. 修复状态一致性异常分支和仍存在的固定放行
+
+当前 `qcStateConsistency()` 在 `computePaletteDistance()` 的 `catch` 中执行 `rules.push(...)`，但 `const rules = []` 在该代码之后才声明。色板计算一旦抛错，会触发 temporal dead zone 的 `ReferenceError`，原始失败原因也会丢失。
+
+同时，rubble 的中心偏移规则仍把 `passed` 固定传为 `true`：
+
+```js
+addRule('CENTER_OFFSET', ..., { max_ratio: ... }, true, evidence)
+```
+
+这违反默认拒绝原则和上一轮“禁止固定 true”的要求。
+
+必须改为：
+
+- 在任何异步测量前创建唯一规则收集器；测量异常通过统一的 `recordHardFailure()` 写入，不允许异常路径访问未初始化变量。
+- rubble 中心、接地点、碎片总体范围和色板均使用真实布尔判定；接近阈值可进入 `REVIEW_REQUIRED`，超过硬阈值必须 `REJECTED`。
+- 色板距离只统计主体 alpha mask 内的有效像素。当前先 `removeAlpha()` 再对整个 64×64 画布求均值会让共同透明背景稀释颜色差异，必须修复。
+- 增加 palette helper 抛错、损坏变体、空 mask、完全不同颜色、中心严重漂移和正常 rubble 的故障注入测试，并断言规则 ID、原始安全错误、状态和有限测量值。
+
+### U. 文件完整性规则仍是伪测量
+
+当前 `qcGate()` 的文件门禁仍有以下问题：
+
+- `FILE_FORMAT` 把测量硬编码为 `{format:'png', decoded:true}`，没有使用 Sharp metadata 的真实格式。
+- `DECODE_COMPLETE` 的表达式 `rgbData.length === w*h*(rgbData.length/(w*h))` 恒等成立，最终 `passed` 又只使用 `!!rgbData`，无法证明完整解码。
+- `hasAlpha = meta.channels >= 4` 以及按固定 4 通道提取 alpha，未正确处理灰度、灰度 alpha和未来其他通道布局。
+- stat 失败被空 catch 转为 `fileSizeBytes=0`，没有保留可诊断原因。
+- `computeBodyBbox()` 仍扫描所有 alpha 像素，主体 bbox 不是最大连通区域 bbox，孤立噪点仍可污染边距与接地点测量。
+
+必须改为：
+
+- 保存真实 `metadata.format/channels/hasAlpha` 和 raw `info.channels/size`；仅真实 PNG 通过 `FILE_FORMAT`。
+- `DECODE_COMPLETE` 使用明确的 `expectedBytes = width*height*channels` 与真实 raw 长度比较，且任何维度、通道、长度不是有限安全整数都硬拒绝。
+- 定义并测试 1、2、3、4 通道输入策略；家具资产不支持的布局明确拒绝，不得错误索引。
+- stat/metadata/raw decode 任一异常均保留阶段化错误并形成失败规则。
+- 连通区域计算返回最大主体 mask/bbox/centroid，后续边距、面积和 ground anchor 全部复用该主体结果。
+- 增加伪 PNG 扩展名、JPEG 改名、截断 PNG、灰度 PNG、灰度 alpha、异常 raw 长度和孤立远端噪点夹具。
+
+### V. 修复发布器的覆盖语义和 manifest 不一致
+
+当前 `publishToApproved()` 无论调用方是否显式允许替换，只要目标存在就自动 rename 为备份，违反“正式目录默认禁止覆盖”。此外，发布时先复制 candidate manifest 到 approved，随后才只更新 candidate manifest 的 `approved_dir`，可能造成已发布 manifest 与返回对象不一致。
+
+必须改为：
+
+- 发布器显式接收 `replace=false`；目标存在时默认返回可诊断冲突且不改动任何文件。
+- `replace=true` 才允许创建备份；验证旧目录和备份哈希后执行原子替换，并在失败时回滚。
+- 在原子发布前完成 manifest 的最终字段、相对资源路径和哈希，写入 staging 后重新校验；rename 后 approved 内 manifest 必须与返回 manifest 内容一致。
+- manifest 不得保存易失效的 candidates 绝对路径；正式包内引用使用包内相对路径或有效 `res://` 路径。
+- 增加“目标已存在且 replace=false”“replace=true 成功”“rename 中途失败回滚”“approved manifest 与返回值逐字段一致”测试。
+
+### W. Godot 资源测试正则实际匹配零条
+
+当前 `test/cover_prop_test.js` 使用 `/ext_resource\s*=\s*"res:\/\/.../` 查找资源，但真实 `.tscn` 语法是：
+
+```text
+[ext_resource type="Texture2D" path="res://..." id="..."]
+```
+
+因此 `extResourceLines` 为空，循环零次，缺失纹理和缺失脚本都不会失败。
+
+必须改为：
+
+- 使用 Godot 解析器或严格解析 section header 的 `path` 字段，禁止以“空匹配数组循环成功”作为验证。
+- 先断言 ext_resource 数量符合预期且至少包含纹理；若声明脚本则也必须存在。
+- 从真实 Godot 项目根解析 `res://`，不能相对 `.tscn` 所在目录猜测。
+- 添加缺失纹理、缺失脚本、错误资源 ID、重复 ID 和无 ext_resource 的负向夹具，确保每个夹具返回非零。
+
+### X. 商业测试编排仍缺少必需套件和可信统计
+
+当前 `test/commercial.js` 的 14 个 suite 中没有资产审计、受控重生成和 Godot headless 门禁。它只依据子进程退出码判定 PASS，不收集断言数、skip 数、耗时或目标路径覆盖证据，却仍输出 `READY`。
+
+必须改为：
+
+- 增加独立 critical suites：`audit`、`regenerate`、`godot_gate`、`failure_injection`、`artifact_cleanup`。
+- 每个 suite 输出机器可读结果：`assertions/passed/failed/skipped/duration_ms/exit_code`；字段缺失、断言数为零、critical skip 或输出无法解析均失败。
+- `provider` 套件需区分真实外部测试与 mock contract；缺 API key 可以标记 external unavailable，但不能把未执行的真实穿透写成 PASS。
+- 商业编排结束后检查仓库测试产物。当前测试会留下 `test/tmp_cover_prop`、`test/tmp_e2e`、`test/tmp_qc_regression`、`test/tmp_regression`，该检查必须令套件失败。
+- 只有 Godot headless 实际加载、audit/regenerate 行为测试执行、失败注入通过、临时产物清零后才允许输出 `READY`。
+
+### Y. 第三次验收必须提供的复核证据
+
+最低复核命令：
+
+```powershell
+npm run test:qc
+npm run test:cover_prop
+node test/e2e_cover_prop.js
+node test/audit_test.js
+node test/regenerate_test.js
+node test/godot_gate_test.js
+npm run test:commercial
+git diff --check
+git status --short
+```
+
+最终报告必须额外附上：
+
+- E2E 实际读取的 `manifest_path`、严格 `APPROVED` 断言和 approved 内 manifest 校验摘要；
+- palette 计算抛错被正确转为 `PALETTE_DISTANCE` 硬失败的输出；
+- rubble 中心超阈值被拒绝的真实测量；
+- 伪 PNG、截断 PNG 和异常 raw 长度分别触发的规则；
+- Godot 缺失脚本/纹理导致整套资产不发布的测试输出；
+- `replace=false` 保持旧 approved 完全不变的前后哈希；
+- audit/regenerate/Godot/故障注入各 suite 的断言数、skip 数、耗时和退出码；
+- 测试结束后 `test/tmp_*` 为零的检查结果。
+
 ## P0：修复现有生产阻塞问题
 
 ### 0. 建立严格机器资产门禁

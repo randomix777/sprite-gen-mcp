@@ -60,10 +60,13 @@ def cutout_and_validate(img, dist_threshold=60, corner_region=30, target_w=512, 
     crop[:, :, 3] = alpha_u8[ymin:ymax+1, xmin:xmax+1]
     ch, cw = crop.shape[:2]
 
-    # 4. Scale to target and center
+    # 4. Scale to target and center — never enlarge beyond original (scale ≤ 1)
+    # Enlarging inflates body_ratio/transparency and pushes body into corner
+    # regions, breaking QC gates. Only shrink if the bbox is too large.
     margin_x = int(target_w * 0.05)
     effective_w = target_w - 2 * margin_x
-    scale = min(effective_w / cw, target_h / ch)
+    raw_scale = min(effective_w / cw, target_h / ch)
+    scale = min(1.0, raw_scale)
     nw = max(1, int(cw * scale))
     nh = max(1, int(ch * scale))
     crop_img = Image.fromarray(crop, "RGBA").resize((nw, nh), Image.LANCZOS)

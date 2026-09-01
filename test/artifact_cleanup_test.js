@@ -24,9 +24,6 @@ function assertFn(cond, name) { assert(cond, name); ok(name); }
 
 // The canonical cleanup routine used across this repo's harness.
 function cleanupTestArtifacts(root) {
-  const testTmp = path.join(root, 'test', 'tmp_cleanup_leftover');
-  rmSync(testTmp, { recursive: true, force: true });
-  // Remove any other test/tmp_* dirs a prior run may have leaked.
   const testDir = path.join(root, 'test');
   for (const entry of (() => { try { return readdirSync(testDir); } catch { return []; } })()) {
     if (entry.startsWith('tmp_')) rmSync(path.join(testDir, entry), { recursive: true, force: true });
@@ -34,7 +31,14 @@ function cleanupTestArtifacts(root) {
 }
 
 async function main() {
-  // 1. Stray artifact leakage: create one, then confirm cleanup removes it.
+  // 1. Detect pre-existing leaks BEFORE this test creates anything.
+  // This is the critical check: E2E or any prior suite must have cleaned up.
+  const testDir = path.join(ROOT, 'test');
+  const preExisting = readdirSync(testDir).filter(e => e.startsWith('tmp_') && e !== 'tmp_cleanup' && e !== 'tmp_cleanup_leftover');
+  // Allow the test's own tmp dir to exist from a previous interrupted run, but report it.
+  assertFn(preExisting.length === 0, `no tmp_* dirs leaked from prior tests (found: ${preExisting.join(',') || 'none'})`);
+
+  // 2. Stray artifact leakage: create one, then confirm cleanup removes it.
   const leak = path.join(ROOT, 'test', 'tmp_cleanup_leftover');
   mkdirSync(leak, { recursive: true });
   writeFileSync(path.join(leak, 'stray.txt'), 'junk');
@@ -42,10 +46,9 @@ async function main() {
   cleanupTestArtifacts(ROOT);
   assertFn(!existsSync(leak), 'cleanup removes stray tmp dir');
 
-  // 2. No test/tmp_* directories remain after cleanup.
-  const testDir = path.join(ROOT, 'test');
-  const remaining = readdirSync(testDir).filter(e => e.startsWith('tmp_'));
-  assertFn(remaining.length === 0, `no tmp_* dirs left (found: ${remaining.join(',') || 'none'})`);
+  // 3. No test/tmp_* directories remain after cleanup.
+  const remaining2 = readdirSync(testDir).filter(e => e.startsWith('tmp_'));
+  assertFn(remaining2.length === 0, `no tmp_* dirs left (found: ${remaining2.join(',') || 'none'})`);
 
   // 3. Cleanup must never touch source files (sanity: package.json survives).
   assertFn(existsSync(path.join(ROOT, 'package.json')), 'cleanup does not delete source');

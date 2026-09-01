@@ -326,4 +326,6 @@ console.log(`\n═════════════════════�
 console.log(`E2E RESULTS: ${passed} passed / ${failed} failed / ${passed + failed} total`);
 console.log('════════════════════════════════════════════════');
 emitReport('e2e', { assertions: passed + failed, passed, failed, startedAt: __startedAt });
+// Cleanup: remove isolated tmp dir on all paths (success/failure) so artifact_cleanup can verify zero leak
+try { rmSync(TMP, { recursive: true, force: true }); } catch (_) {}
 process.exit(failed > 0 ? 1 : 0);

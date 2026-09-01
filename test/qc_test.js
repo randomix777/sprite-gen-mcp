@@ -285,4 +285,4 @@ assert(missingQc.error.code === 'FILE_NOT_FOUND', 'Missing file → FILE_NOT_FOU
 // ─── Summary ────────────────────────────────────────────────────────────────
 console.log(`\nQC RESULTS: ${passed}/${passed + failed} passed`);
 emitReport('qc', { assertions: passed + failed, passed, failed, startedAt: __startedAt });
-process.exit(failed > 0 ? 1 : 0);
+import('fs').then(({ rmSync }) => { try { rmSync(TMP, { recursive: true, force: true }); } catch (_) {} }).finally(() => process.exit(failed > 0 ? 1 : 0));

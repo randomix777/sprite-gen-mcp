@@ -29,6 +29,7 @@ import {
   animationListService, effectGenerateService, effectListService,
   weaponGenerateService, weaponListService, batchGenerateService,
   batchProcessService, backgroundService,
+  generateCoverPropService, auditAssetsService, regenerateRejectedAssetsService,
 } from "./lib/services.js";
 
 import { ok, err, ErrorCode, sanitizeMessage } from "./lib/result.js";
@@ -616,6 +617,65 @@ const TOOLS = [
       required: ["project_path"],
     },
   },
+  // ── CoverProp Asset Pipeline ────────────────────────────────────────────────
+  {
+    name: "sprite_generate_cover_prop",
+    description: "Generate a complete CoverProp asset: AI-generated intact state, QC gates, rubble variant, manifest, and optional Godot scene export.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prop_id: { type: "string", description: "Unique asset identifier" },
+        prompt: { type: "string", description: "Description of the cover prop" },
+        material_type: { type: "string", enum: ["wood", "metal", "glass", "fabric", "masonry", "composite"] },
+        cover_height: { type: "string", enum: ["low", "high"], default: "low" },
+        width: { type: "integer", default: 1024 },
+        height: { type: "integer", default: 1024 },
+        provider: { type: "string" },
+        reference_image_path: { type: "string" },
+        seed: { type: "integer" },
+        states: { type: "array", items: { type: "string" }, default: ["intact", "rubble"] },
+        output_dir: { type: "string", default: "./output/cover_props" },
+        godot_project_path: { type: "string" },
+      },
+      required: ["prop_id", "prompt", "material_type"],
+    },
+  },
+  {
+    name: "sprite_audit_assets",
+    description: "Audit existing game assets against QC gates: check transparency, body composition, background contamination, and state consistency. Read-only — does not modify any files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        input_path: { type: "string", description: "Single file, directory, or Godot project path" },
+        recursive: { type: "boolean", default: true },
+        asset_type: { type: "string", enum: ["auto", "cover_prop", "sprite", "animation", "effect", "tileset", "ui"] },
+        report_dir: { type: "string" },
+        strict: { type: "boolean", default: true },
+      },
+      required: ["input_path"],
+    },
+  },
+  {
+    name: "sprite_regenerate_rejected_assets",
+    description: "Regenerate assets that failed QC gates. Reads an audit report, re-generates only REJECTED assets with adaptive strategies, and re-runs all QC gates. Original files are never overwritten.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        audit_report_path: { type: "string", description: "Path to asset_audit.json from a prior audit" },
+        statuses: { type: "array", items: { type: "string" }, default: ["REJECTED"] },
+        rule_ids: { type: "array", items: { type: "string" } },
+        asset_paths: { type: "array", items: { type: "string" } },
+        provider: { type: "string" },
+        max_assets: { type: "integer", default: 50 },
+        max_attempts_per_asset: { type: "integer", default: 3 },
+        output_root: { type: "string", default: "./output/cover_props/regenerations" },
+        approve_after_gate: { type: "boolean", default: false },
+        replace: { type: "boolean", default: false },
+        dry_run: { type: "boolean", default: false },
+      },
+      required: ["audit_report_path"],
+    },
+  },
 ];
 
 // ─── Tool dispatch (thin routing only) ──────────────────────────────────────
@@ -662,6 +722,9 @@ async function handleToolCall(name, args) {
     case "sprite_godot_add_animation":  return godotAddAnimationService(args);
     case "sprite_godot_wire_animations": return godotWireAnimationsService(args);
     case "sprite_godot_scan":           return godotScanService(args);
+    case "sprite_generate_cover_prop":  return generateCoverPropService(args);
+    case "sprite_audit_assets":         return auditAssetsService(args);
+    case "sprite_regenerate_rejected_assets": return regenerateRejectedAssetsService(args);
     default:
       return err(ErrorCode.INVALID_ARGUMENT, `Unknown tool: ${name}`, { stage: 'validation' });
   }

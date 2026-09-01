@@ -124,10 +124,10 @@ setup();
 
 console.log('\n1. Tool registry audit');
 
-await testAsync('server.js exports 32 tools', async () => {
+await testAsync('server.js exports 35 tools', async () => {
   const { TOOLS } = await importHandler('server.js');
   assert(Array.isArray(TOOLS), `TOOLS should be array, got ${typeof TOOLS}`);
-  assertEqual(TOOLS.length, 32, `Expected 32 tools, got ${TOOLS.length}`);
+  assertEqual(TOOLS.length, 35, `Expected 35 tools, got ${TOOLS.length}`);
 });
 
 await testAsync('all tool names start with sprite_', async () => {
