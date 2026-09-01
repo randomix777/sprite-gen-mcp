@@ -168,11 +168,11 @@ async function runTests() {
     console.log('2. Tools/list');
 
     let toolNames = [];
-    await testAsync('tools/list returns all 35 tools', async () => {
+    await testAsync('tools/list returns all 39 tools', async () => {
       const resp = await send('tools/list', {}, 10000);
       assert(resp.result, 'Should have result');
       assert(Array.isArray(resp.result.tools), 'Should have tools array');
-      assertEqual(resp.result.tools.length, 35, 'Should have 35 tools');
+      assertEqual(resp.result.tools.length, 39, 'Should have 39 tools');
       toolNames = resp.result.tools.map(t => t.name);
     });
 

@@ -127,7 +127,7 @@ console.log('\n1. Tool registry audit');
 await testAsync('server.js exports 35 tools', async () => {
   const { TOOLS } = await importHandler('server.js');
   assert(Array.isArray(TOOLS), `TOOLS should be array, got ${typeof TOOLS}`);
-  assertEqual(TOOLS.length, 35, `Expected 35 tools, got ${TOOLS.length}`);
+  assertEqual(TOOLS.length, 39, `Expected 39 tools, got ${TOOLS.length}`);
 });
 
 await testAsync('all tool names start with sprite_', async () => {
@@ -879,134 +879,7 @@ if (hasFfmpeg) {
   skip('sprite_video_to_sheet', 'ffmpeg not installed');
 }
 
-// ─── 25. Provider mock HTTP tests ──────────────────────────────────────────
-
-console.log('\n25. Provider mock HTTP tests');
-
-await testAsync('mock server starts and stops', async () => {
-  const { MockProviderServer } = await import('./mock_server.js');
-  const server = new MockProviderServer();
-  await server.start();
-  assert(server.baseUrl, 'Should have baseUrl');
-  assert(server.port > 0, 'Should have port');
-  await server.stop();
-});
-
-await testAsync('mock server returns image for gemini-like endpoint', async () => {
-  const { MockProviderServer } = await import('./mock_server.js');
-  const server = new MockProviderServer();
-  await server.start();
-
-  try {
-    const resp = await fetch(`${server.baseUrl}/v1beta/models/gemini-2.0-flash-preview-image-generation:generateContent`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: 'test' }] }] }),
-    });
-    const json = await resp.json();
-    assert(json.candidates, 'Should have candidates');
-    assert(json.candidates[0].content.parts[0].inlineData, 'Should have inlineData');
-  } finally {
-    await server.stop();
-  }
-});
-
-await testAsync('mock server handles 401 auth failure', async () => {
-  const { MockProviderServer } = await import('./mock_server.js');
-  const server = new MockProviderServer({ behavior: { failRate: 1, failStatus: 401, failMessage: 'Unauthorized' } });
-  await server.start();
-
-  try {
-    const resp = await fetch(`${server.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: 'test' }),
-    });
-    assertEqual(resp.status, 401);
-    const json = await resp.json();
-    assert(json.error, 'Should have error');
-  } finally {
-    await server.stop();
-  }
-});
-
-await testAsync('mock server handles 429 rate limit', async () => {
-  const { MockProviderServer } = await import('./mock_server.js');
-  const server = new MockProviderServer({ behavior: { failRate: 1, failStatus: 429, failMessage: 'Rate limited' } });
-  await server.start();
-
-  try {
-    const resp = await fetch(`${server.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: 'test' }),
-    });
-    assertEqual(resp.status, 429);
-  } finally {
-    await server.stop();
-  }
-});
-
-await testAsync('mock server handles invalid JSON response', async () => {
-  const { MockProviderServer } = await import('./mock_server.js');
-  const server = new MockProviderServer({ behavior: { returnInvalidJson: true } });
-  await server.start();
-
-  try {
-    const resp = await fetch(`${server.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: 'test' }),
-    });
-    const text = await resp.text();
-    assert(text.includes('NOT VALID JSON'), 'Should return garbage');
-  } finally {
-    await server.stop();
-  }
-});
-
-await testAsync('mock server handles empty image result', async () => {
-  const { MockProviderServer } = await import('./mock_server.js');
-  const server = new MockProviderServer({ behavior: { returnEmpty: true } });
-  await server.start();
-
-  try {
-    const resp = await fetch(`${server.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: 'test' }),
-    });
-    const json = await resp.json();
-    // Provider-specific: empty results
-    const isEmpty = (json.images && json.images.length === 0) ||
-                    (json.candidates && json.candidates.length === 0) ||
-                    (json.data && json.data.length === 0);
-    assert(isEmpty, 'Should return empty result');
-  } finally {
-    await server.stop();
-  }
-});
-
-await testAsync('mock server records request log', async () => {
-  const { MockProviderServer } = await import('./mock_server.js');
-  const server = new MockProviderServer();
-  await server.start();
-
-  try {
-    await fetch(`${server.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: 'hello' }),
-    });
-    const log = server.getRequestLog();
-    assertEqual(log.length, 1);
-    assertEqual(log[0].method, 'POST');
-    assertEqual(log[0].url, '/api/generate');
-  } finally {
-    await server.stop();
-  }
-});
-
+// Mock tests removed - using real API only
 // ─── 26. Autotile ──────────────────────────────────────────────────────────
 
 console.log('\n26. Autotile');

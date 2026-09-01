@@ -30,6 +30,7 @@ import {
   weaponGenerateService, weaponListService, batchGenerateService,
   batchProcessService, backgroundService,
   generateCoverPropService, auditAssetsService, regenerateRejectedAssetsService,
+  generateCoverPropPhase1Service, listPendingReviewsService, approveCoverPropService, processCoverPropPhase2Service,
 } from "./lib/services.js";
 
 import { ok, err, ErrorCode, sanitizeMessage } from "./lib/result.js";
@@ -619,6 +620,57 @@ const TOOLS = [
   },
   // ── CoverProp Asset Pipeline ────────────────────────────────────────────────
   {
+    name: "sprite_generate_cover_prop_phase1",
+    description: "Phase 1: Generate CoverProp image and run QC preview. User must approve before Phase 2 processing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prop_id: { type: "string", description: "Unique asset identifier" },
+        prompt: { type: "string", description: "Description of the cover prop" },
+        material_type: { type: "string", enum: ["wood", "metal", "glass", "fabric", "masonry", "composite"] },
+        cover_height: { type: "string", enum: ["low", "high"], default: "low" },
+        width: { type: "integer", default: 128 },
+        height: { type: "integer", default: 128 },
+        provider: { type: "string" },
+        output_dir: { type: "string", default: "./output/phase1_previews" },
+      },
+      required: ["prop_id", "prompt", "material_type"],
+    },
+  },
+  {
+    name: "sprite_list_pending_reviews",
+    description: "List all pending CoverProp assets awaiting user approval.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "sprite_approve_cover_prop",
+    description: "Approve a CoverProp asset for Phase 2 processing (cutout + post-processing).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prop_id: { type: "string", description: "Asset ID to approve" },
+        candidate_dir: { type: "string", description: "Path to candidate directory" },
+      },
+      required: ["prop_id", "candidate_dir"],
+    },
+  },
+  {
+    name: "sprite_process_cover_prop_phase2",
+    description: "Process approved CoverProp assets: cutout, post-processing, and Godot export.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        prop_id: { type: "string", description: "Asset ID to process" },
+        candidate_dir: { type: "string", description: "Path to approved candidate directory" },
+        godot_project_path: { type: "string", description: "Godot project path for scene export" },
+      },
+      required: ["prop_id", "candidate_dir"],
+    },
+  },
+  {
     name: "sprite_generate_cover_prop",
     description: "Generate a complete CoverProp asset: AI-generated intact state, QC gates, rubble variant, manifest, and optional Godot scene export.",
     inputSchema: {
@@ -723,6 +775,10 @@ async function handleToolCall(name, args) {
     case "sprite_godot_wire_animations": return godotWireAnimationsService(args);
     case "sprite_godot_scan":           return godotScanService(args);
     case "sprite_generate_cover_prop":  return generateCoverPropService(args);
+    case "sprite_generate_cover_prop_phase1":  return generateCoverPropPhase1Service(args);
+    case "sprite_list_pending_reviews":  return listPendingReviewsService(args);
+    case "sprite_approve_cover_prop":  return approveCoverPropService(args);
+    case "sprite_process_cover_prop_phase2":  return processCoverPropPhase2Service(args);
     case "sprite_audit_assets":         return auditAssetsService(args);
     case "sprite_regenerate_rejected_assets": return regenerateRejectedAssetsService(args);
     default:
