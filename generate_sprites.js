@@ -5,7 +5,8 @@
 import { providerFetch } from './lib/provider_http.js';
 import fs from 'fs';
 
-const KEY = 'sk-k2H1TCEtR7Di31cswhX2pnkltaGV6F2D6aYQyv3ifU6688Y1';
+const KEY = process.env.AGNES_API_KEY;
+if (!KEY) throw new Error('Set AGNES_API_KEY before running this script');
 const BASE_URL = 'https://apihub.agnes-ai.com/v1/images/generations';
 const MODEL = 'agnes-image-2.1-flash';
 const PROJECT = 'D:/Projects/CodeChronoBullet/assets';

@@ -4,7 +4,8 @@
 import { providerFetch } from './lib/provider_http.js';
 import { LIMITS } from './lib/limits.js';
 
-const API_KEY = 'sk-k2H1TCEtR7Di31cswhX2pnkltaGV6F2D6aYQyv3ifU6688Y1';
+const API_KEY = process.env.AGNES_API_KEY;
+if (!API_KEY) throw new Error('Set AGNES_API_KEY before running this test');
 const BASE_URL = 'https://apihub.agnes-ai.com/v1';
 const HEADERS = {
   'Content-Type': 'application/json',
