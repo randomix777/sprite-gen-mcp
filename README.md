@@ -95,6 +95,32 @@ sprite_video_to_sheet(video_path="./walk_cycle.mp4", fps=8, pixel_scale=4)
 sprite_export_godot(image_path="./character.png", cell_width=128, output_path="./character.tres")
 ```
 
+## Staged CoverProp Approval Workflow
+
+Launch the local review UI with `npm run web`, then open the address printed in the terminal (default `http://127.0.0.1:4317`). If that port is occupied, the server automatically selects the next available port and records it in `output/review-ui.json`. It preserves every rejected revision and requires approval before generating the next stage.
+
+CoverProp assets can be generated one stage at a time. A stage never advances without explicit user approval:
+
+Concept creation and concept revision use different generation modes. The first concept is text-to-image. Rejected concept revisions use the current concept as an image-to-image identity reference by default; the user must explicitly choose “restart from text” to discard the design.
+
+```text
+concept (text-to-image)
+  → approve
+intact (image-to-image from concept)
+  → approve
+rubble (image-to-image from intact)
+  → approve
+publish concept + intact + rubble
+```
+
+1. Call `sprite_generate_cover_prop_phase1` to generate only the concept preview.
+2. Review `preview_path`, then call `sprite_approve_cover_prop` with the returned `candidate_dir`.
+3. Call `sprite_process_cover_prop_phase2` to generate exactly one next stage.
+4. Review and approve the intact preview, then call `sprite_process_cover_prop_phase2` again for rubble.
+5. Approving rubble publishes all three retained stage images.
+
+Use `sprite_list_pending_reviews` to retrieve workflows currently waiting for approval. Intact and rubble responses include QC status, rejected rules, and an evidence image, but user approval remains mandatory.
+
 ## Providers
 
 - **gemini_flash** — Google Gemini Flash (free tier, API key required)

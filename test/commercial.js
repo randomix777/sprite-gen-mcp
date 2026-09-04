@@ -42,7 +42,8 @@ const SUITES = [
   { name: 'agnes',     script: 'test/agnes_contract.js',     critical: true },
   { name: 'audit',     script: 'test/audit_test.js',         critical: true },
   { name: 'regenerate', script: 'test/regenerate_test.js',   critical: true },
-  { name: 'godot_gate', script: 'test/godot_gate_test.js',   critical: false, needsGodot: true },
+  { name: 'godot_gate', script: 'test/godot_gate_test.js',   critical: true, needsGodot: true },
+  { name: 'godot_resolution', script: 'test/godot_resolution_test.js', critical: true, needsGodot: false },
   { name: 'artifact_cleanup', script: 'test/artifact_cleanup_test.js', critical: true },
   { name: 'failure_injection', script: 'test/failure_injection_test.js', critical: true },
 ];

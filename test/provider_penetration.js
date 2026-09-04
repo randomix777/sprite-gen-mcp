@@ -150,6 +150,21 @@ await testAsync('Retry fails after max attempts', async () => {
   }
 });
 
+await testAsync('Retry handles retryable result objects', async () => {
+  const { retryWithBackoff } = await import('../lib/retry.js');
+  let callCount = 0;
+  const result = await retryWithBackoff(async () => {
+    callCount++;
+    if (callCount < 3) {
+      return { success: false, error: { code: 'PROVIDER_UNAVAILABLE', retryable: true } };
+    }
+    return { success: true, data: 'ok' };
+  }, 3, 1);
+
+  assert(result.success === true, 'Should return the successful result');
+  assert(callCount === 3, 'Should retry result objects marked retryable');
+});
+
 // ─── Cleanup ─────────────────────────────────────────────────────────────
 
 rmSync(TMP, { recursive: true, force: true });

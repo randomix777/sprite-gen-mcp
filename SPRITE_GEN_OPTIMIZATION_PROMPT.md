@@ -11,6 +11,15 @@
 - 不使用伪实现。参考图、批量生成、质量检测和 Godot 导出必须通过真实数据路径验证。
 - 每完成一个阶段运行相关测试；最终运行完整测试并报告结果。
 
+## 分阶段概念设计与修改约束
+
+- 首张概念图必须使用文生图，只负责建立物体身份、结构、材质、比例与美术风格。
+- 概念图被拒绝后的默认修改必须使用图生图：把当前概念图作为真实参考图传入 Agnes，并组合原始需求与用户修改意见。
+- 修改 Prompt 必须明确列出必须保持的身份、主体结构、材质、配色、比例和风格，并把用户意见声明为唯一允许变化的部分。
+- 不得通过持续追加 `Revision feedback` 的方式污染旧 Prompt；每次修改都从原始设计需求和结构化约束重新构建干净 Prompt。
+- “放弃当前设计并重新文生图”必须是独立显式操作；不得与默认概念修改混用。
+- 每次修改保留旧图片、生成模式、Prompt、参考图路径、用户意见和时间戳，以便审核与回溯。
+
 ## 当前验收结论与本轮强制整改范围
 
 上一轮提交虽然报告 `test:commercial` 通过并宣称 `READY`，但静态审计和实际测试表明严格资产门禁尚未闭环。本轮不要重新评估这些问题是否存在，直接把下列问题视为已确认缺陷并逐项修复。任何一项未完成，最终结论必须是 `BLOCKED`，不得输出 `READY`。
@@ -33,6 +42,7 @@ node test/e2e_cover_prop.js
 - `test:commercial` 退出码为 `1`，19 个套件中 17 个 `PASS`、1 个关键套件 `FAIL`、1 个套件 `BLOCKED`，最终 verdict 为 `BLOCKED`。
 - `e2e` 为 `14 passed / 6 failed / 20 total`。CoverProp 的 `intact` 成功，但 `rubble` 失败，最终状态为 `REJECTED`；失败返回缺少 `manifest_path` 和 `candidates_dir`，测试继续对 `undefined` 调用 `existsSync/readFileSync` 并崩溃。
 - `godot_gate` 因当前机器未找到 Godot 4 可执行文件而 `BLOCKED`，尚无真实 Godot headless 导入和场景加载通过证据。
+- 商业汇总当前仍把 `godot_gate` 显示为 `Critical: no`，与本文要求冲突。当前非零退出码来自 `e2e` 失败，不能据此证明“Godot 缺失本身必然阻止商业命令成功”。
 - 安全矩阵明确报告 `gifPreviewService` 未验证 `output_path`。不得因为该矩阵当前将用例计为通过而忽略此漏洞。
 - E2E 执行后遗留 `test/tmp_e2e/`；商业验收要求的零临时产物泄漏尚未满足。
 
@@ -43,7 +53,7 @@ node test/e2e_cover_prop.js
 3. E2E 必须逐阶段断言并安全终止后续依赖断言，既保留首个真实失败原因，也不能因测试代码的二次异常掩盖生产缺陷。
 4. 为 `gifPreviewService.output_path` 接入与其他写服务相同的路径穿越、绝对路径、UNC、覆盖、输入输出同路径及目标类型校验，并增加行为测试。
 5. 所有测试临时目录使用唯一隔离目录并在成功、失败和异常路径中清理；`artifact_cleanup` 必须能检测到 E2E 遗漏，而不是在检查前替被测套件删除证据。
-6. 在安装 Godot 4 的环境实际运行 headless import/load 门禁；缺少 Godot 时最终状态保持 `BLOCKED`，不得降级为 `PASS` 或 `READY`。
+6. 将 `godot_gate` 设为真实 critical suite，并增加隔离测试证明：即使其余套件全部通过，Godot 缺失也会让 `test:commercial` 返回非零且 verdict 为 `BLOCKED`；安装 Godot 4 后再实际运行 headless import/load 门禁。
 
 修复后最低复核命令为：
 

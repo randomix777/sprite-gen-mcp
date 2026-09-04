@@ -9,6 +9,7 @@
   },
   "scripts": {
     "start": "node server.js",
+    "web": "node web/server.js",
     "test": "node test/test_all.js",
     "test:unit": "node test/test_all.js",
     "test:contract": "node test/contract_all.js",
@@ -22,6 +23,9 @@
     "test:qc": "node test/qc_test.js",
     "test:regression": "node test/regression.js",
     "test:cover_prop": "node test/cover_prop_test.js",
+    "test:phased": "node test/phased_workflow_test.js",
+    "test:phased:v2": "node test/phased_workflow_v2_test.js",
+    "test:godot-resolution": "node test/godot_resolution_test.js",
     "test:e2e": "node test/e2e_cover_prop.js",
     "test:audit": "node test/audit_test.js",
     "test:regenerate": "node test/regenerate_test.js",

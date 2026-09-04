@@ -29,13 +29,24 @@ import {
   animationListService, effectGenerateService, effectListService,
   weaponGenerateService, weaponListService, batchGenerateService,
   batchProcessService, backgroundService,
-  generateCoverPropService, auditAssetsService, regenerateRejectedAssetsService,
+  auditAssetsService, regenerateRejectedAssetsService,
   generateCoverPropPhase1Service, listPendingReviewsService, approveCoverPropService, processCoverPropPhase2Service,
 } from "./lib/services.js";
+import {
+  createCoverPropWorkflowService,
+  generateConceptService, reviseConceptService, restartConceptService, approveConceptStageService,
+  selectViewsStageService, generateViewsBatchService, generateSingleViewStageService,
+  approveViewStageService, rejectViewStageService, regenerateViewStageService,
+  generateStateVariantsStageService, generateAllStatesBatchService,
+  approveStateStageService, rejectStateStageService,
+  performQCStageService, publishWorkflowStageService,
+  getCoverPropWorkflowService
+} from "./lib/services_phased.js";
 
 import { ok, err, ErrorCode, sanitizeMessage } from "./lib/result.js";
 import { validate } from "./lib/validate.js";
 import { STYLE_PRESETS } from "./lib/prompts.js";
+import { CAMERA_PRESET_IDS } from "./lib/camera_presets.js";
 
 import path from "path";
 import { fileURLToPath } from "url";
@@ -154,6 +165,94 @@ const TOOL_SCHEMAS = {
   },
   "sprite_godot_scan": {
     project_path: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_generate_cover_prop_phase1": {
+    prop_id: { type: 'string', required: true, minLength: 1, maxLength: 100 },
+    prompt: { type: 'string', required: true, minLength: 1, maxLength: 10000 },
+    material_type: { type: 'string', required: true, enum: ['wood', 'metal', 'glass', 'fabric', 'masonry', 'composite'] },
+    camera_view: { type: 'string', enum: CAMERA_PRESET_IDS },
+    width: { type: 'number', min: 64, max: 4096 },
+    height: { type: 'number', min: 64, max: 4096 },
+  },
+  "sprite_create_workflow": {
+    prop_id: { type: 'string', required: true, minLength: 1, maxLength: 100 },
+    prompt: { type: 'string', required: true, minLength: 1, maxLength: 10000 },
+    material_type: { type: 'string', required: true, enum: ['wood', 'metal', 'glass', 'fabric', 'masonry', 'composite'] },
+    asset_type: { type: 'string', enum: ['prop', 'character', 'weapon', 'vehicle', 'tile', 'background', 'ui', 'effect'], default: 'prop' },
+    style_profile: { type: 'string', enum: ['clean_game', 'pixel_art', 'painted', 'concept'], default: 'clean_game' },
+    camera_view: { type: 'string', enum: CAMERA_PRESET_IDS },
+    width: { type: 'number', min: 64, max: 4096 },
+    height: { type: 'number', min: 64, max: 4096 },
+  },
+  "sprite_approve_cover_prop": {
+    prop_id: { type: 'string', required: true, minLength: 1, maxLength: 100 },
+    candidate_dir: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_process_cover_prop_phase2": {
+    prop_id: { type: 'string', required: true, minLength: 1, maxLength: 100 },
+    candidate_dir: { type: 'string', required: true, minLength: 1 },
+  },
+  "sprite_generate_views": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    view: { type: 'string', enum: CAMERA_PRESET_IDS },
+    states: { type: 'array', items: { type: 'string' }, default: ["intact", "damaged", "rubble"] },
+  },
+  "sprite_regenerate_view": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    view: { type: 'string', enum: CAMERA_PRESET_IDS, required: true },
+  },
+  "sprite_generate_states": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    view: { type: 'string', enum: CAMERA_PRESET_IDS, required: true },
+    states: { type: 'array', items: { type: 'string' }, default: ["intact", "damaged", "rubble"] },
+  },
+  "sprite_publish_workflow": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    replace: { type: 'boolean', default: false },
+  },
+  "sprite_concept_revise": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    feedback: { type: 'string', required: true, minLength: 1, maxLength: 5000 },
+  },
+  "sprite_concept_restart": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+  },
+  "sprite_select_views": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    selected_views: { type: 'array', items: { type: 'string', enum: CAMERA_PRESET_IDS }, minItems: 1, maxItems: 7, required: true },
+  },
+  "sprite_batch_generate_views": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+  },
+  "sprite_batch_generate_states": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    states: { type: 'array', items: { type: 'string' }, default: ["intact", "damaged", "rubble"] },
+  },
+  "sprite_approve_view": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    view: { type: 'string', enum: CAMERA_PRESET_IDS, required: true },
+    note: { type: 'string', maxLength: 1000 },
+  },
+  "sprite_reject_view": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    view: { type: 'string', enum: CAMERA_PRESET_IDS, required: true },
+    note: { type: 'string', required: true, minLength: 1, maxLength: 1000 },
+  },
+  "sprite_approve_state": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    view: { type: 'string', enum: CAMERA_PRESET_IDS, required: true },
+    state: { type: 'string', enum: ["intact", "damaged", "rubble"], required: true },
+    note: { type: 'string', maxLength: 1000 },
+  },
+  "sprite_reject_state": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    view: { type: 'string', enum: CAMERA_PRESET_IDS, required: true },
+    state: { type: 'string', enum: ["intact", "damaged", "rubble"], required: true },
+    note: { type: 'string', required: true, minLength: 1, maxLength: 1000 },
+  },
+  "sprite_perform_qc": {
+    workflow_id: { type: 'string', required: true, minLength: 1, maxLength: 200 },
+    strict: { type: 'boolean', default: true },
   },
 };
 
@@ -621,7 +720,7 @@ const TOOLS = [
   // ── CoverProp Asset Pipeline ────────────────────────────────────────────────
   {
     name: "sprite_generate_cover_prop_phase1",
-    description: "Phase 1: Generate CoverProp image and run QC preview. User must approve before Phase 2 processing.",
+    description: "Start a staged CoverProp workflow. Generates only a text-to-image concept preview; explicit user approval is required before intact generation.",
     inputSchema: {
       type: "object",
       properties: {
@@ -629,6 +728,7 @@ const TOOLS = [
         prompt: { type: "string", description: "Description of the cover prop" },
         material_type: { type: "string", enum: ["wood", "metal", "glass", "fabric", "masonry", "composite"] },
         cover_height: { type: "string", enum: ["low", "high"], default: "low" },
+        camera_view: { type: "string", enum: CAMERA_PRESET_IDS, default: "end_profile" },
         width: { type: "integer", default: 128 },
         height: { type: "integer", default: 128 },
         provider: { type: "string" },
@@ -639,7 +739,7 @@ const TOOLS = [
   },
   {
     name: "sprite_list_pending_reviews",
-    description: "List all pending CoverProp assets awaiting user approval.",
+    description: "List staged CoverProp workflows currently waiting for user approval, including preview and QC evidence paths.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -647,32 +747,33 @@ const TOOLS = [
   },
   {
     name: "sprite_approve_cover_prop",
-    description: "Approve a CoverProp asset for Phase 2 processing (cutout + post-processing).",
+    description: "Approve only the current CoverProp stage. Concept approval unlocks intact; intact approval unlocks rubble; rubble approval publishes the final set.",
     inputSchema: {
       type: "object",
       properties: {
         prop_id: { type: "string", description: "Asset ID to approve" },
         candidate_dir: { type: "string", description: "Path to candidate directory" },
+        note: { type: "string", description: "Optional user approval note" },
+        output_dir: { type: "string", description: "Final publish root; used only when approving rubble" },
       },
       required: ["prop_id", "candidate_dir"],
     },
   },
   {
     name: "sprite_process_cover_prop_phase2",
-    description: "Process approved CoverProp assets: cutout, post-processing, and Godot export.",
+    description: "Generate exactly one next CoverProp stage from the approved current image: concept→intact or intact→rubble. Returns a new preview for approval.",
     inputSchema: {
       type: "object",
       properties: {
         prop_id: { type: "string", description: "Asset ID to process" },
         candidate_dir: { type: "string", description: "Path to approved candidate directory" },
-        godot_project_path: { type: "string", description: "Godot project path for scene export" },
       },
       required: ["prop_id", "candidate_dir"],
     },
   },
   {
     name: "sprite_generate_cover_prop",
-    description: "Generate a complete CoverProp asset: AI-generated intact state, QC gates, rubble variant, manifest, and optional Godot scene export.",
+    description: "Compatibility entry point for the staged CoverProp workflow. Generates only a text-to-image concept preview; explicit user approval is required before every later stage.",
     inputSchema: {
       type: "object",
       properties: {
@@ -680,6 +781,7 @@ const TOOLS = [
         prompt: { type: "string", description: "Description of the cover prop" },
         material_type: { type: "string", enum: ["wood", "metal", "glass", "fabric", "masonry", "composite"] },
         cover_height: { type: "string", enum: ["low", "high"], default: "low" },
+        camera_view: { type: "string", enum: CAMERA_PRESET_IDS, default: "end_profile" },
         width: { type: "integer", default: 1024 },
         height: { type: "integer", default: 1024 },
         provider: { type: "string" },
@@ -774,11 +876,30 @@ async function handleToolCall(name, args) {
     case "sprite_godot_add_animation":  return godotAddAnimationService(args);
     case "sprite_godot_wire_animations": return godotWireAnimationsService(args);
     case "sprite_godot_scan":           return godotScanService(args);
-    case "sprite_generate_cover_prop":  return generateCoverPropService(args);
+    case "sprite_generate_cover_prop":  return generateCoverPropPhase1Service(args);
+    // Legacy phased tools
     case "sprite_generate_cover_prop_phase1":  return generateCoverPropPhase1Service(args);
     case "sprite_list_pending_reviews":  return listPendingReviewsService(args);
     case "sprite_approve_cover_prop":  return approveCoverPropService(args);
     case "sprite_process_cover_prop_phase2":  return processCoverPropPhase2Service(args);
+    // New v2 multi-view workflow tools
+    case "sprite_create_workflow": return createCoverPropWorkflowService(args);
+    case "sprite_generate_views": return generateSingleViewStageService(args);
+    case "sprite_regenerate_view": return regenerateViewStageService(args);
+    case "sprite_generate_states": return generateStateVariantsStageService(args);
+    case "sprite_publish_workflow": return publishWorkflowStageService(args);
+    case "sprite_concept_revise": return reviseConceptService(args);
+    case "sprite_concept_restart": return restartConceptService(args);
+    case "sprite_select_views": return selectViewsStageService(args);
+    case "sprite_batch_generate_views": return generateViewsBatchService(args);
+    case "sprite_batch_generate_states": return generateAllStatesBatchService(args);
+    case "sprite_approve_view": return approveViewStageService(args);
+    case "sprite_reject_view": return rejectViewStageService(args);
+    case "sprite_approve_state": return approveStateStageService(args);
+    case "sprite_reject_state": return rejectStateStageService(args);
+    case "sprite_perform_qc": return performQCStageService(args);
+    // Get workflow info
+    case "sprite_get_workflow": return getCoverPropWorkflowService(args);
     case "sprite_audit_assets":         return auditAssetsService(args);
     case "sprite_regenerate_rejected_assets": return regenerateRejectedAssetsService(args);
     default:

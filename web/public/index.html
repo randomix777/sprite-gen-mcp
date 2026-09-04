@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SpriteGen · 通用精灵图工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    /* Stage indicator */
+    .stage-indicator {
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .stage-step {
+      padding: 8px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      background: var(--muted);
+      color: var(--muted-foreground);
+      transition: all 0.2s;
+    }
+    .stage-step.active {
+      background: var(--primary);
+      color: var(--primary-foreground);
+    }
+    .stage-step.completed {
+      background: var(--success);
+      color: var(--success-foreground);
+    }
+    .stage-step.rejected {
+      background: var(--destructive);
+      color: var(--destructive-foreground);
+    }
+    
+    /* Concept history */
+    .concept-history {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-height: 400px;
+      overflow-y: auto;
+      padding-right: 8px;
+    }
+    .concept-item {
+      display: flex;
+      gap: 12px;
+      padding: 12px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+    }
+    .concept-item.approved {
+      border-color: var(--success);
+    }
+    .concept-item.rejected {
+      border-color: var(--destructive);
+    }
+    .concept-thumb {
+      width: 80px;
+      height: 80px;
+      object-fit: cover;
+      border-radius: 4px;
+    }
+    .concept-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .concept-info h4 {
+      margin: 0 0 4px 0;
+      font-size: 14px;
+    }
+    .concept-info p {
+      margin: 0 0 8px 0;
+      font-size: 12px;
+      color: var(--muted-foreground);
+    }
+    
+    /* View selection */
+    .view-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+    .view-option {
+      padding: 16px;
+      background: var(--card);
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+    .view-option:hover {
+      border-color: var(--primary);
+    }
+    .view-option.selected {
+      border-color: var(--primary);
+      background: var(--primary) / 0.1;
+    }
+    .view-option label {
+      display: block;
+      font-weight: 500;
+      margin-bottom: 4px;
+    }
+    .view-option small {
+      font-size: 11px;
+      color: var(--muted-foreground);
+    }
+    
+    /* View review grid */
+    .view-review-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+      margin: 16px 0;
+    }
+    .view-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .view-card.approved {
+      border-color: var(--success);
+    }
+    .view-card.rejected {
+      border-color: var(--destructive);
+    }
+    .view-card.generating {
+      opacity: 0.7;
+    }
+    .view-card img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+    }
+    .view-card-body {
+      padding: 12px;
+    }
+    .view-card-body h4 {
+      margin: 0 0 4px 0;
+      font-size: 14px;
+    }
+    .view-card-body .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      margin-bottom: 8px;
+    }
+    .status-approved { background: var(--success); color: var(--success-foreground); }
+    .status-rejected { background: var(--destructive); color: var(--destructive-foreground); }
+    .status-pending { background: var(--muted); color: var(--muted-foreground); }
+    .status-generating { background: var(--warning); color: var(--warning-foreground); }
+    
+    /* State matrix */
+    .state-matrix {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+      margin: 16px 0;
+    }
+    .state-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .state-card img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+    }
+    .state-card-body {
+      padding: 12px;
+    }
+    
+    /* Progress bar */
+    .progress-bar {
+      height: 4px;
+      background: var(--muted);
+      border-radius: 2px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .progress-fill {
+      height: 100%;
+      background: var(--primary);
+      transition: width 0.3s;
+    }
+    
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 48px 24px;
+      color: var(--muted-foreground);
+    }
+    .empty-state .reticle {
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    
+    /* Form improvements */
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+    }
+    .form-grid label {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      font-size: 14px;
+    }
+    .form-grid input,
+    .form-grid select,
+    .form-grid textarea {
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--background);
+      color: var(--foreground);
+      font-size: 14px;
+    }
+    .form-grid textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <span class="eyebrow">SPRITEGEN</span>
+      <h1>通用精灵图工作台</h1>
+      <div id="godot-status"></div>
+    </div>
+    <button id="new-task" class="primary">＋ 新建需求</button>
+  </header>
+  
+  <main>
+    <aside>
+      <div class="section-title">
+        <span>工作队列</span>
+        <button id="refresh" class="ghost">刷新</button>
+      </div>
+      <div id="task-list" class="task-list"></div>
+    </aside>
+    
+    <section id="workspace" class="workspace empty">
+      <div class="empty-state">
+        <div class="reticle">＋</div>
+        <h2>开始新的美术资产生产流程</h2>
+        <p>完整的管线：需求 → 概念设计 → 批准 → 多视角生产 → 状态变体 → QC → 发布</p>
+      </div>
+    </section>
+  </main>
+
+  <!-- Create workflow dialog -->
+  <dialog id="create-dialog">
+    <form id="create-form">
+      <div class="dialog-head">
+        <div>
+          <span class="eyebrow">STAGE 01</span>
+          <h2>创建美术资产需求</h2>
+        </div>
+        <button type="button" class="ghost close">关闭</button>
+      </div>
+      <label>资产 ID<input name="prop_id" required pattern="[A-Za-z0-9_-]+" placeholder="concrete_barrier_01"></label>
+      <label>画面描述<textarea name="prompt" required rows="4" placeholder="废弃地铁站中的低矮混凝土掩体，俯视射击游戏资产…"></textarea></label>
+      <div class="form-grid">
+        <label>资产类型<select name="asset_type"><option value="prop">场景道具</option><option value="character">角色</option><option value="weapon">武器</option><option value="vehicle">载具</option><option value="tile">地块 / 瓦片</option><option value="background">背景</option><option value="ui">UI 元素</option><option value="effect">特效</option></select></label>
+        <label>风格预设<select name="style_profile"><option value="clean_game">清晰游戏资产</option><option value="pixel_art">像素风</option><option value="painted">手绘插画</option><option value="concept">概念设计</option></select></label>
+        <label>相机视角<select name="camera_view"><option value="end_profile">短边端面侧视（默认）</option><option value="long_elevation">长边正立面</option><option value="front">正面正交</option><option value="rear">背面正交</option><option value="top_down">正交俯视</option><option value="three_quarter">3/4 展示视角</option><option value="isometric">等距视角</option></select><small id="create-camera-help">从物体窄端看过去；长边向屏幕内部延伸。</small></label>
+        <label>材质<select name="material_type"><option value="masonry">砖石 / 混凝土</option><option value="metal">金属</option><option value="wood">木材</option><option value="glass">玻璃</option><option value="fabric">织物</option><option value="composite">复合材料</option></select></label>
+        <label>掩体高度<select name="cover_height"><option value="low">低</option><option value="high">高</option></select></label>
+        <label>宽度<input type="number" name="width" value="1024" min="64" max="4096"></label>
+        <label>高度<input type="number" name="height" value="1024" min="64" max="4096"></label>
+      </div>
+      <div id="generation-progress" class="generation-progress" hidden>
+        <div class="spinner"></div>
+        <div>
+          <strong>正在生成概念图</strong>
+          <p>已等待 <span id="elapsed">0</span> 秒，请保持页面开启。</p>
+        </div>
+        <button id="cancel-generation" type="button" class="danger">取消</button>
+      </div>
+      <button class="primary wide" type="submit">创建并生成概念图</button>
+    </form>
+  </dialog>
+  
+  <div id="toast" role="status"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

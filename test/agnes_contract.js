@@ -3,6 +3,7 @@
 
 import { ok, err, ErrorCode } from '../lib/result.js';
 import { getProviderConfig } from '../lib/config.js';
+import { buildAgnesEndpoint, buildAgnesRequestBody } from '../lib/image_gen.js';
 
 const TEST_PROVIDER = 'agnes';
 
@@ -30,6 +31,27 @@ async function runAgnesContract() {
     console.log('✗ Agnes config contract incomplete');
     console.log('  Config:', JSON.stringify(cfg, null, 2));
     process.exit(2);
+  }
+
+  if (cfg.model !== 'agnes-image-2.5-flash') {
+    throw new Error(`Unexpected Agnes model: ${cfg.model}`);
+  }
+
+  const endpoint = buildAgnesEndpoint(cfg.baseUrl);
+  if (endpoint !== 'https://apihub.agnes-ai.com/v1/images/generations') {
+    throw new Error(`Unexpected Agnes endpoint: ${endpoint}`);
+  }
+
+  const textBody = buildAgnesRequestBody('test', cfg.model, { width: 128, height: 128 });
+  if (textBody.size !== '1K' || textBody.ratio !== '1:1'
+      || textBody.extra_body?.response_format !== 'url'
+      || 'return_base64' in textBody) {
+    throw new Error(`Unexpected Agnes text request: ${JSON.stringify(textBody)}`);
+  }
+
+  const landscapeBody = buildAgnesRequestBody('test', cfg.model, { width: 1920, height: 1080 });
+  if (landscapeBody.size !== '2K' || landscapeBody.ratio !== '16:9') {
+    throw new Error(`Unexpected Agnes landscape request: ${JSON.stringify(landscapeBody)}`);
   }
 
   console.log('  ✓ Agnes contract test passed (config shape)');
